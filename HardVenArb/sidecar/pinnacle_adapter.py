@@ -682,6 +682,7 @@ class PinnacleAdapter(BookAdapter):
         self._del_wiped_matchups = 0
         self._live_regressions = 0      # tokens observed going live -> pre WITHOUT a del
         self._parent_redirects = 0      # /odds served a LIVE child in place of a cached, non-live parent
+        self._reseed_kept_live = 0      # in-play tokens a pre-match REST snapshot was NOT allowed to overwrite
         self._ever_live: set = set()    # every token that has EVER carried live=True this run
         self._ws_last_msg_ts = 0.0        # unix ts of the last odds frame from EITHER WS source
         self._sub_pass_noted = False      # one-shot log while a subscription pass is in flight
@@ -2901,6 +2902,9 @@ class PinnacleAdapter(BookAdapter):
             "del_wiped_matchups": self._del_wiped_matchups,
             "live_regressions": self._live_regressions,
             "parent_redirects": self._parent_redirects,
+            # pre-match REST snapshots that tried to overwrite an IN-PLAY price and were refused (each one was a
+            # frozen pre-match line served as live before 2026-10-05) — see _apply_straight_markets
+            "reseed_kept_live": self._reseed_kept_live,
             # tokens that were live at some point and are not live now — the population that regressed
             "lost_the_tag": [k for k in ever if k not in set(live_now)][:40],
             "live_now_sample": live_now[:20],
@@ -2985,7 +2989,9 @@ class PinnacleAdapter(BookAdapter):
         """Upsert every OPEN period-0 moneyline/spread/total token from a /markets/straight snapshot into the
         cache (shared by the AUTHED seed `_refresh_league` and the GUEST reader re-seed `_reseed_league_guest`).
         Each token's ts=now marks it fresh; a token no longer in the snapshot is left to age out via its ts (no
-        reconcile here — the WS `_apply` does the explicit suspend). Returns the token count applied."""
+        reconcile here — the WS `_apply` does the explicit suspend). Returns the token count the snapshot
+        COVERED: written, plus in-play tokens it was not allowed to touch (see below) — so a venue refetch of
+        a league still reads as "the venue answered", exactly as before."""
         n = 0
         for mk in markets:
             mid = mk.get("matchupId")
@@ -2996,9 +3002,21 @@ class PinnacleAdapter(BookAdapter):
                     old = self._cache.get(token)
                     # A /markets/straight snapshot is PRE-MATCH-blind — it must NOT downgrade an IN-PLAY tag the
                     # WS set (this re-seed was clobbering live→pre-live, so in-play arbs vanished after the first
-                    # live game). Keep live once the WS has flagged it; the game's `del` clears it when it ends.
+                    # live game). The game's `del` clears the tag when it ends.
+                    #
+                    # NOR MAY IT TOUCH THE PRICE. The first fix kept the tag and still took the snapshot's odds,
+                    # and this endpoint lists an in-play match at its LAST PRE-MATCH LINE, status open (see
+                    # _read_cache). So every keepalive re-seed served the frozen pre-match price as a live one
+                    # until the next WS push put the real price back. Measured 2026-10-05 from the EV bot's
+                    # follow-ups: of 47 in-play readings that jumped >=10c within 12s of a signal, 39 (83%)
+                    # landed EXACTLY on that market's pre-match price, while Kalshi did not move at all - it
+                    # read as Pinnacle "snapping" against us, and made the winner's-curse monitor go yellow.
+                    # The live feed owns an in-play token: leave it exactly as the WS last set it (its last price,
+                    # its status - a suspended in-play leg is not reopened by a pre-match snapshot either).
                     if old is not None and old.live and not sel.live:
-                        sel.live = True
+                        self._reseed_kept_live += 1
+                        n += 1
+                        continue
                     self._cache[token] = sel
                     n += 1
         return n

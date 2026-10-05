@@ -21,10 +21,15 @@ public readonly record struct FeedHealth(
          + $", {Subscribed}/{ActiveLeagues} league(s) subscribed, {LiveMsgs + PreMsgs} msg(s)";
 }
 
-/// <summary>One Pinnacle selection as the sidecar last served it, plus when WE received it.</summary>
+/// <summary>One Pinnacle selection as the sidecar last served it, plus when WE received it.
+/// <para><c>OddsChangedUtc</c> / <c>StatusChangedUtc</c>: when this selection's OPEN price last moved, and
+/// when it last flipped between open and suspended, as our poller saw them (±1 poll). The sidecar's own
+/// <c>ts</c> cannot answer either - it re-stamps every quote at serve time - so these are the only record of
+/// how OLD a price really is. <c>DateTime.MinValue</c> = no change seen since we started watching it.</para></summary>
 public sealed record OracleQuote(
     double DecimalOdds, double MaxContracts, string Status, bool Live,
-    double VenueTsUnix, DateTime ReceivedUtc, bool WsVerified)
+    double VenueTsUnix, DateTime ReceivedUtc, bool WsVerified,
+    DateTime OddsChangedUtc = default, DateTime StatusChangedUtc = default)
 {
     public bool Open => Status == "open" && DecimalOdds > 1.0;
 }
@@ -45,6 +50,11 @@ public sealed class PinnacleOracle
     private readonly string _base;
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(15) };
     private readonly ConcurrentDictionary<string, OracleQuote> _quotes = new(StringComparer.Ordinal);
+    /// <summary>Per selection: the last OPEN price, when it last changed, whether it was open at the last
+    /// poll, and when that last flipped. Kept apart from <c>_quotes</c> because a suspension can serve the
+    /// selection with no price at all - comparing against THAT would log every suspension as two moves.</summary>
+    private readonly ConcurrentDictionary<string, (double Odds, DateTime OddsAt, bool Open, DateTime OpenAt)> _moves
+        = new(StringComparer.Ordinal);
     private readonly List<string> _tokens;
     private readonly HashSet<string> _tokenSet;
     private readonly object _tokenLock = new();
@@ -143,7 +153,7 @@ public sealed class PinnacleOracle
             _tokens.AddRange(want);
             _tokenSet.Clear();
             foreach (var t in want) _tokenSet.Add(t);
-            foreach (var t in gone) _quotes.TryRemove(t, out _);   // else the cache grows as the list shrinks
+            foreach (var t in gone) { _quotes.TryRemove(t, out _); _moves.TryRemove(t, out _); }   // else the cache grows as the list shrinks
             return (added, gone.Count);
         }
     }
@@ -454,8 +464,9 @@ public sealed class PinnacleOracle
         else Console.WriteLine(line);
     }
 
-    /// <summary>Parses one /odds response into the quote cache. Returns how many quotes were stale.</summary>
-    private int Apply(string json)
+    /// <summary>Parses one /odds response into the quote cache. Returns how many quotes were stale.
+    /// Internal for the self-test, which feeds it canned responses to check the change stamps.</summary>
+    internal int Apply(string json)
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
@@ -516,6 +527,20 @@ public sealed class PinnacleOracle
                 VenueTsUnix : D("ts"),
                 ReceivedUtc : now,
                 WsVerified  : !s.TryGetProperty("wv", out var wv) || wv.ValueKind != JsonValueKind.False);
+            // HOW OLD IS THIS PRICE, REALLY? Logged, never gated on (2026-10-05): a third of the winner's curse
+            // sits in in-play signals bought on a Pinnacle price that was already out of date - Kalshi saw the
+            // point first - and at entry those looked identical to good bets on every column we had. Only an
+            // OPEN price counts as a price: a suspension is a status change, not a move, so the price compare
+            // skips it and the reopening is compared against the last open price.
+            bool open = q.Open;
+            var m = _moves.TryGetValue(prop.Name, out var pm)
+                ? (Odds   : open && q.DecimalOdds != pm.Odds ? q.DecimalOdds : pm.Odds,
+                   OddsAt : open && pm.Odds > 0 && q.DecimalOdds != pm.Odds ? now : pm.OddsAt,
+                   Open   : open,
+                   OpenAt : open != pm.Open ? now : pm.OpenAt)
+                : (Odds: open ? q.DecimalOdds : 0.0, OddsAt: DateTime.MinValue, Open: open, OpenAt: DateTime.MinValue);
+            _moves[prop.Name] = m;
+            q = q with { OddsChangedUtc = m.OddsAt, StatusChangedUtc = m.OpenAt };
             _quotes[prop.Name] = q;
             if (!Fresh(q)) stale++;
             if (!q.WsVerified) _sawUnverified = true;

@@ -27,7 +27,16 @@ public sealed record EvSignal(
     // handicap or total and is blank on a moneyline. LiveEligible records whether the order was
     // allowed AT THE TIME, so a later flip of EV_LIVE_DERIVATIVES does not rewrite history: rows
     // logged while derivatives were held must stay distinguishable from rows logged after.
-    string MarketType = "moneyline", double Line = double.NaN, bool LiveEligible = true);
+    string MarketType = "moneyline", double Line = double.NaN, bool LiveEligible = true,
+    // APPENDED 2026-10-05 - how old each price was at valuation. Logged, never gated on. Blank = unknown.
+    //   PinChangeAgeMs    ms since Pinnacle's OPEN price last moved on any leg (our poller's view, ±1 poll)
+    //   PinLastStepCents  that last move of OUR side's P_true, in cents: + = toward us
+    //   PinStatusAgeMs    ms since any leg last flipped open <-> suspended
+    //   KalshiMove2s/10sCents  our side's WS ask now minus 2s / 10s ago: - = Kalshi got CHEAPER for us,
+    //                     the shape of Kalshi repricing a point before Pinnacle shows it
+    //   KalshiChangeAgeMs ms since our side's WS ask last changed
+    double PinChangeAgeMs = double.NaN, double PinLastStepCents = double.NaN, double PinStatusAgeMs = double.NaN,
+    double KalshiMove2sCents = double.NaN, double KalshiMove10sCents = double.NaN, double KalshiChangeAgeMs = double.NaN);
 
 /// <summary>
 /// Append-only CSV of every REST-valued candidate. This file IS milestone M1 — the bot places no orders,
@@ -49,6 +58,7 @@ public sealed class EvTelemetry : IDisposable
         "KellyF", "Alpha", "Beta", "Fraction", "BankrollUsd", "TargetUsd", "Contracts", "FlooredToZero",
         "OrderFeeUsd", "StakeUsd", "InPriceWindow", "Decision", "NumLegs", "PinOddsAll", "OracleWsVerified", "WsDepthToLimit", "CapacityUsd", "MoveRegime", "VenueVerify", "PinnacleRiseCents", "DeVigAgree",
         "MarketType", "Line", "LiveEligible",
+        "PinChangeAgeMs", "PinLastStepCents", "PinStatusAgeMs", "KalshiMove2sCents", "KalshiMove10sCents", "KalshiChangeAgeMs",
     };
 
     private readonly RollingCsv _csv;
@@ -64,6 +74,8 @@ public sealed class EvTelemetry : IDisposable
     private static string N(double v, int dp = 6) => RollingCsv.N(v, dp);
     private static string N(decimal v, int dp = 6) => RollingCsv.N(v, dp);
     private static string Q(string? s) => RollingCsv.Q(s);
+    /// <summary>A number, or blank when it is not known - never a sentinel that could be averaged.</summary>
+    private static string F(double v, int dp) => double.IsFinite(v) ? RollingCsv.N(v, dp) : "";
 
     public void Write(EvSignal s)
     {
@@ -84,6 +96,8 @@ public sealed class EvTelemetry : IDisposable
             N(s.WsDepthToLimit, 2), N(s.CapacityUsd, 2), Q(s.MoveRegime), Q(s.VenueVerify),
             double.IsFinite(s.PinnacleRiseCents) ? N(s.PinnacleRiseCents, 2) : "", s.DeVigAgree ? "1" : "0",
             Q(s.MarketType), double.IsFinite(s.Line) ? N(s.Line, 2) : "", s.LiveEligible ? "1" : "0",
+            F(s.PinChangeAgeMs, 0), F(s.PinLastStepCents, 2), F(s.PinStatusAgeMs, 0),
+            F(s.KalshiMove2sCents, 2), F(s.KalshiMove10sCents, 2), F(s.KalshiChangeAgeMs, 0),
         };
 
         // Arity is checked inside WriteRow, on EVERY row. A one-column drift corrupts everything after it

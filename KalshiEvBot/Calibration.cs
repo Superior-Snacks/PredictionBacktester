@@ -356,7 +356,9 @@ public static class Calibration
     /// <para>ORACLE DRIFT — the winner's curse (added 2026-09-28): how far Pinnacle's OWN price falls back
     /// after we select it, set against the edge we buy. The ~1pt it measures is what separates bought EV from
     /// realised; the CUSHION (bought + drift) is the edge left after it. Breaks if Pinnacle gets noisier, or
-    /// if a guard change starts selecting more of its noise.</para>
+    /// if a guard change starts selecting more of its noise. Since 2026-10-05 only readings the signal path
+    /// would have accepted count (all legs open and fresh); older readings included the frozen pre-match line
+    /// the sidecar's re-seed wrote over in-play prices, and are named but never averaged.</para>
     ///
     /// <para><b>Colours are the verdict.</b> Green on all three: ignore the P&amp;L, let it run. Any yellow:
     /// look at that line's pooled section. Any red: stop and find out why before the next block. The tags
@@ -515,17 +517,29 @@ public static class Calibration
         // edge); yellow when it is negative at all, or the window's drift is 2 sigma worse than lifetime.
         // Every signal counts (the curse is in the selection, not the fill; fill-specific bias measured ~0),
         // first signal per ticker+side, so a re-signalling market is one observation.
-        var driftAt = new Dictionary<string, (DateTime At, double Cents)>(StringComparer.Ordinal);
+        //
+        // ONLY READINGS THE SIGNAL PATH WOULD HAVE ACCEPTED (2026-10-05). Before the fix the T+300 reading took
+        // whatever the sidecar cached - suspended legs, and the frozen PRE-MATCH line its keepalive re-seed
+        // wrote over in-play prices (83% of the in-play "snaps" landed exactly on it). Those rows carry no
+        // PinState and are LEGACY: counted, named, never averaged. A side whose first signal's T+300 reading
+        // was refused (suspended / stale / gone) is left out rather than swapped for a later signal's reading,
+        // which would select on readability.
+        var firstAt = new Dictionary<string, (DateTime At, double Cents, bool Clean, bool Legacy)>(StringComparer.Ordinal);
         foreach (var r in ReportCache.LoadFollowUps(dir, followPrefix))
         {
             if (r.Decision != "SIGNAL" || double.IsNaN(r.AgeSec) || Math.Abs(r.AgeSec - 300) > 30) continue;
-            if (!double.IsFinite(r.EntryPTrue) || !double.IsFinite(r.NowPTrue) || r.EntryAt == DateTime.MinValue) continue;
+            if (!double.IsFinite(r.EntryPTrue) || r.EntryAt == DateTime.MinValue) continue;
             string key = r.Ticker + "|" + r.Side;
-            if (driftAt.TryGetValue(key, out var have) && have.At <= r.EntryAt) continue;
-            driftAt[key] = (r.EntryAt, (r.NowPTrue - r.EntryPTrue) * 100);       // + = toward our side
+            if (firstAt.TryGetValue(key, out var have) && have.At <= r.EntryAt) continue;
+            bool legacy = string.IsNullOrEmpty(r.PinState);
+            bool clean  = r.PinState == "open" && double.IsFinite(r.NowPTrue);
+            firstAt[key] = (r.EntryAt, clean ? (r.NowPTrue - r.EntryPTrue) * 100 : double.NaN, clean, legacy);   // + = toward our side
         }
-        var dLife = Stat(driftAt.Values.Select(v => v.Cents));
-        var dWin  = Stat(driftAt.Values.Where(v => v.At >= oldest && v.At <= newest).Select(v => v.Cents));
+        var inWinD   = firstAt.Values.Where(v => v.At >= oldest && v.At <= newest).ToList();
+        int legacyW  = inWinD.Count(v => v.Legacy);
+        int refusedW = inWinD.Count(v => !v.Legacy && !v.Clean);
+        var dLife = Stat(firstAt.Values.Where(v => v.Clean).Select(v => v.Cents));
+        var dWin  = Stat(inWinD.Where(v => v.Clean).Select(v => v.Cents));
         double bCtr = 0, bSum = 0;
         foreach (var r in att.Where(r => r.Fill >= 1 && r.At >= oldest && r.At <= newest && double.IsFinite(r.PTrue)))
         {
@@ -538,17 +552,27 @@ public static class Calibration
         {
             double bought = 100 * bSum / bCtr, cushion = bought + dWin.M;
             double tC = dWin.Se > 0 ? cushion / dWin.Se : 0;
-            bool worse = !double.IsNaN(dLife.Se) && dWin.M - dLife.M < -2 * dWin.Se;
+            // "worse than lifetime" needs a lifetime worth the name - clean readings only began 2026-10-05
+            bool worse = dLife.N >= 100 && !double.IsNaN(dLife.Se) && dWin.M - dLife.M < -2 * dWin.Se;
             int gO = cushion + 2 * dWin.Se < 0 ? 2 : (cushion < 0 || worse) ? 1 : 0;
             grades.Add(gO);
-            Line(gO, $"ORACLE DRIFT  Pinnacle {dWin.M:+0.00;-0.00}c +/-{dWin.Se:0.00} by T+300 (the winner's curse; lifetime {dLife.M:+0.00;-0.00})   "
+            Line(gO, $"ORACLE DRIFT  Pinnacle {dWin.M:+0.00;-0.00}c +/-{dWin.Se:0.00} by T+300 (the winner's curse; "
+                   + (dLife.N >= 100 ? $"lifetime {dLife.M:+0.00;-0.00}" : $"clean history n={dLife.N}") + ")   "
                    + $"bought {bought:+0.00;-0.00}c/ctr -> CUSHION {cushion:+0.00;-0.00}c (t={tC:+0.0;-0.0})   "
-                   + $"(n={dWin.N}; red = cushion negative at 2 sigma)");
+                   + $"(n={dWin.N}{(refusedW > 0 ? $", {refusedW} refused" : "")}; red = cushion negative at 2 sigma)");
+        }
+        else if (legacyW > 0)
+        {
+            // Not a verdict either way: the only readings this window has are the ones the fix proved wrong.
+            grades.Add(1);
+            Line(1, $"ORACLE DRIFT  re-baselining: {dWin.N} clean T+300 reading(s) in the window, needs 30. Its {legacyW} "
+                   + "older reading(s) predate the 2026-10-05 fix and included frozen pre-match prices, so they no longer count");
         }
         else
         {
             grades.Add(1);
-            Line(1, $"ORACLE DRIFT  only {dWin.N} of the window's signals have a T+300 oracle reading - too few to read");
+            Line(1, $"ORACLE DRIFT  only {dWin.N} of the window's signals have a clean T+300 oracle reading"
+                   + (refusedW > 0 ? $" ({refusedW} refused: Pinnacle suspended, stale or gone)" : "") + " - too few to read");
         }
 
         // ── verdict ─────────────────────────────────────────────────────────────────────────────

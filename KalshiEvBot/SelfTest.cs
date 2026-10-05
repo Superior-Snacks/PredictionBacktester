@@ -991,6 +991,98 @@ public static class SelfTest
                   "repeat prints at one price are summed into a single level", FillLadderLog.Ladder(dupes));
         }
 
+        // ── price-age telemetry: when did each price last REALLY change (2026-10-05) ─────────────────────
+        {
+            Console.WriteLine("\n-- price-age stamps --");
+            var t0 = new DateTime(2026, 10, 5, 12, 0, 0, DateTimeKind.Utc);
+            var keep = TimeSpan.FromSeconds(30);
+            var tr = new EvEvaluator.PTrueTrack();
+            tr.Add(t0, 0.50, keep);
+            tr.Add(t0.AddMilliseconds(400), 0.50, keep);
+            Check(tr.LastChange().At == DateTime.MinValue, "no change seen yet -> unknown, not 'changed at the first sample'");
+            tr.Add(t0.AddMilliseconds(500), 0.52, keep);
+            Check(tr.LastChange().At == t0.AddMilliseconds(500) && Math.Abs(tr.LastChange().Step - 0.02) < 1e-12,
+                  "a change is stamped with its time and signed size");
+            tr.Add(t0.AddMilliseconds(600), 0.49, keep);            // inside the 250ms sampling floor
+            Check(tr.LastChange().At == t0.AddMilliseconds(600) && Math.Abs(tr.LastChange().Step + 0.03) < 1e-12,
+                  "a change INSIDE the 250ms sampling floor still moves the clock");
+            tr.Add(t0.AddMilliseconds(2000), 0.49, keep);
+            Check(tr.LastChange().At == t0.AddMilliseconds(600), "re-sampling an unchanged price does not move it");
+            // 0.52 and 0.49 arrived inside the floor and were never KEPT, so the 1s window runs from the 0.50
+            // kept at +400ms to 0.49 now: the change stamps see every tick, the series stays bounded
+            Check(tr.TryRise(t0.AddMilliseconds(2000), TimeSpan.FromSeconds(1), out double mv) && Math.Abs(mv + 0.01) < 1e-9,
+                  "the move over a window still reads from the KEPT samples", $"{mv:+0.000;-0.000}");
+
+            // the oracle side: an open price, a suspension, a reopening
+            var orc = new PinnacleOracle("", new[] { "a" });
+            string Odds(string status, double odds)
+                => "{\"selections\":{\"a\":{\"decimal_odds\":" + odds.ToString(CultureInfo.InvariantCulture)
+                 + ",\"status\":\"" + status + "\",\"live\":true,\"ts\":1}}}";
+            orc.Apply(Odds("open", 1.90));
+            var q1 = orc.Get("a")!;
+            Check(q1.OddsChangedUtc == DateTime.MinValue && q1.StatusChangedUtc == DateTime.MinValue,
+                  "first sighting: both ages unknown");
+            orc.Apply(Odds("open", 1.90));
+            Check(orc.Get("a")!.OddsChangedUtc == DateTime.MinValue, "same price again -> still no change");
+            orc.Apply(Odds("open", 2.00));
+            var moved = orc.Get("a")!.OddsChangedUtc;
+            Check(moved != DateTime.MinValue, "a new open price is stamped");
+            orc.Apply(Odds("suspended", 0));
+            var q4 = orc.Get("a")!;
+            Check(q4.OddsChangedUtc == moved && q4.StatusChangedUtc != DateTime.MinValue,
+                  "a suspension is a STATUS change, not a price move");
+            orc.Apply(Odds("open", 2.00));
+            Check(orc.Get("a")!.OddsChangedUtc == moved,
+                  "reopening at the last open price is not a move (compared against the last OPEN price)");
+            orc.Apply(Odds("open", 2.20));
+            Check(orc.Get("a")!.OddsChangedUtc >= moved && orc.Get("a")!.DecimalOdds == 2.20, "the next real move is stamped");
+
+            // the telemetry row: six new columns at the END, unknown written blank
+            Check(EvTelemetry.Columns[^6..].SequenceEqual(new[] { "PinChangeAgeMs", "PinLastStepCents", "PinStatusAgeMs",
+                                                                  "KalshiMove2sCents", "KalshiMove10sCents", "KalshiChangeAgeMs" }),
+                  "the new columns are APPENDED, never inserted");
+        }
+
+        // ── follow-up oracle reading: by the signal path's rules (2026-10-05) ───────────────────────────
+        {
+            Console.WriteLine("\n-- follow-up oracle reading --");
+            long nowS = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var orc = new PinnacleOracle("", new[] { "h", "a" });
+            string Book(string hs, double ho, string aws, double ao)
+                => "{\"selections\":{"
+                 + "\"h\":{\"decimal_odds\":" + ho.ToString(CultureInfo.InvariantCulture) + ",\"status\":\"" + hs + "\",\"live\":true,\"ts\":" + nowS + "},"
+                 + "\"a\":{\"decimal_odds\":" + ao.ToString(CultureInfo.InvariantCulture) + ",\"status\":\"" + aws + "\",\"live\":true,\"ts\":" + nowS + "}}}";
+            var fu = new FollowUp(DateTime.UtcNow.AddSeconds(-300), "KXT-1-A", "YES", new[] { "h", "a" }, 0,
+                                  "SIGNAL", "STANDING", 0.40, 0.45, 0.02, "proportional", 100);
+
+            orc.Apply(Book("open", 2.0, "open", 2.0));
+            var r1 = FollowUpTracker.ReadOracle(orc, fu, DateTime.UtcNow);
+            Check(r1.State == "open" && Math.Abs(r1.P - 0.5) < 1e-9, "every leg open and fresh -> a reading", $"{r1.State} {r1.P}");
+            orc.Apply(Book("open", 2.0, "suspended", 1.5));
+            var r2 = FollowUpTracker.ReadOracle(orc, fu, DateTime.UtcNow);
+            Check(r2.State == "suspended" && double.IsNaN(r2.P) && double.IsFinite(r2.Raw),
+                  "a suspended leg -> NO reading, but the raw value is kept for the log", $"{r2.State} raw {r2.Raw:0.000}");
+            Check(r2.Legs.Contains("/suspended/live/"), "the legs say what was cached", r2.Legs);
+            var r3 = FollowUpTracker.ReadOracle(orc, fu with { Legs = new[] { "h", "zzz" } }, DateTime.UtcNow);
+            Check(r3.State == "gone" && double.IsNaN(r3.P) && r3.Legs.EndsWith("|-"), "a leg with no quote -> gone", r3.Legs);
+
+            int C(string name) => Array.IndexOf(FollowUpTracker.Columns, name);
+            var rowSusp = FollowUpTracker.Row(fu, DateTime.UtcNow, 0.43, 0.41, r2);
+            Check(rowSusp.Length == FollowUpTracker.Columns.Length, "row arity matches the header");
+            Check(rowSusp[C("NowAsk")] != "" && rowSusp[C("KalshiDriftCents")] != "" && rowSusp[C("NowPTrue")] == ""
+                  && rowSusp[C("PinnacleDriftCents")] == "" && rowSusp[C("GapNowCents")] == ""
+                  && rowSusp[C("WhoClosed")].Contains("oracle-suspended"),
+                  "oracle refused, book readable -> Kalshi kept (it is the CLV), Pinnacle blank, labelled why");
+            Check(rowSusp[C("PinState")].Contains("suspended") && rowSusp[C("NowPTrueRaw")] != "",
+                  "PinState and the raw cached value are logged");
+            var rowOk = FollowUpTracker.Row(fu, DateTime.UtcNow, 0.43, 0.41, r1);
+            Check(rowOk[C("NowPTrue")] != "" && rowOk[C("GapNowCents")] != "" && !rowOk[C("WhoClosed")].Contains("oracle"),
+                  "both readable -> the full row, as before");
+            var rowGone = FollowUpTracker.Row(fu, DateTime.UtcNow, 1.0, double.NaN, r1);
+            Check(rowGone[C("NowAsk")] == "" && rowGone[C("NowPTrue")] != "" && rowGone[C("WhoClosed")].Contains("book-gone"),
+                  "book gone, oracle fine -> Pinnacle kept, labelled book-gone");
+        }
+
         // ── re-entry: the game cap, with the floor re-applied after it ───────────────────────────────────
         {
             Console.WriteLine("\n-- re-entry game cap --");

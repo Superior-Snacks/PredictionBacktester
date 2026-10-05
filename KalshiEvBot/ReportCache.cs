@@ -5,10 +5,13 @@ namespace KalshiEvBot;
 /// <summary>One follow-up row, reduced to the columns the report reads. <c>EntryUtc</c> is kept as the
 /// exact string the tracker wrote (section 10 joins it against the cooldown log by string) and also parsed
 /// once into <c>EntryAt</c> (UTC; <c>DateTime.MinValue</c> when unparseable). <c>NowPTrue</c> is the
-/// oracle's own price at the checkpoint, on our side - the radar's ORACLE DRIFT line.</summary>
+/// oracle's own price at the checkpoint, on our side - the radar's ORACLE DRIFT line. <c>PinState</c> is
+/// how that reading was taken: "open" = by the signal path's rules (rows from 2026-10-05 on), any other
+/// value = refused (NowPTrue blank), "" = a LEGACY row from before the rule, whose NowPTrue may be a
+/// suspended leg or the frozen pre-match line.</summary>
 public sealed record FollowRow(string Ticker, string Side, string Decision, string EntryUtc, DateTime EntryAt,
                                double AgeSec, double EntryAsk, double EntryPTrue, double NowAsk, double NowBid,
-                               double EntryDepth, double NowPTrue = double.NaN);
+                               double EntryDepth, double NowPTrue = double.NaN, string PinState = "");
 
 /// <summary>
 /// Per-file typed cache for the report's inputs.
@@ -38,8 +41,9 @@ public static class ReportCache
     public const int Version = 1;
     private const string Magic = "EVCACHE";
     /// <summary>The follow-up cache's header tag. Bump ITS suffix when FollowRow's fields change: that
-    /// re-parses the follow-ups only, not the gigabyte of telemetry a Version bump would. v2 = NowPTrue.</summary>
-    private const string FollowKind = "follow.v2";
+    /// re-parses the follow-ups only, not the gigabyte of telemetry a Version bump would. v2 = NowPTrue,
+    /// v3 = PinState.</summary>
+    private const string FollowKind = "follow.v3";
 
     public static int Hits, Misses;
     /// <summary>Follow-up rows whose entry fell in Kalshi's maintenance window, set aside at load time
@@ -185,7 +189,7 @@ public static class ReportCache
             rows.Add(new FollowRow(Csv.Str(r, "Ticker"), Csv.Str(r, "Side"), Csv.Str(r, "Decision"), eu, at,
                                    Csv.Num(r, "AgeSec"), Csv.Num(r, "EntryAsk"), Csv.Num(r, "EntryPTrue"),
                                    Csv.Num(r, "NowAsk"), Csv.Num(r, "NowBid"), Csv.Num(r, "EntryDepth"),
-                                   Csv.Num(r, "NowPTrue")));
+                                   Csv.Num(r, "NowPTrue"), Csv.Str(r, "PinState")));
         }
         ParseSeconds += sw.Elapsed.TotalSeconds;
         TryWriteFollow(cp, fi, rows);
@@ -209,7 +213,8 @@ public static class ReportCache
                 string eu = r.ReadString();
                 var at = DateTime.FromBinary(r.ReadInt64());
                 rows.Add(new FollowRow(ticker, side, dec, eu, at, r.ReadDouble(), r.ReadDouble(), r.ReadDouble(),
-                                       r.ReadDouble(), r.ReadDouble(), r.ReadDouble(), r.ReadDouble()));
+                                       r.ReadDouble(), r.ReadDouble(), r.ReadDouble(), r.ReadDouble(),
+                                       ReadStr(r, tbl)));
             }
             return true;
         }
@@ -233,6 +238,7 @@ public static class ReportCache
                     w.Write(o.EntryAt.ToBinary());
                     w.Write(o.AgeSec); w.Write(o.EntryAsk); w.Write(o.EntryPTrue);
                     w.Write(o.NowAsk); w.Write(o.NowBid); w.Write(o.EntryDepth); w.Write(o.NowPTrue);
+                    WriteStr(w, o.PinState ?? "", tbl);
                 }
             }
             File.Move(tmp, cp, overwrite: true);

@@ -342,18 +342,35 @@ public sealed class EvEvaluator
     /// oracle move at close to its true resolution.</summary>
     private readonly ConcurrentDictionary<string, PTrueTrack> _ptrue = new(StringComparer.Ordinal);
 
-    /// <summary>Bounded time-series of one side's de-vigged fair value.</summary>
+    /// <summary>Kalshi's ask per (market, side), sampled at the top of EVERY evaluation - see EvaluateAsync.
+    /// Same bounded series as the fair value's; it feeds the KalshiMove*/KalshiChangeAgeMs telemetry only.</summary>
+    private readonly ConcurrentDictionary<string, PTrueTrack> _kask = new(StringComparer.Ordinal);
+
+    /// <summary>Bounded time-series of one side's de-vigged fair value (and, in <c>_kask</c>, of a Kalshi
+    /// ask: nothing here is specific to probabilities).</summary>
     internal sealed class PTrueTrack
     {
         // Read once: TryRise runs on every valuation, and an env lookup per call is pure waste.
         private static readonly double MaxHoleSec = EvConfig.Env("EV_KINETIC_MAX_HOLE_SEC", 0.0);   // 0 = OFF (see TryRise)
         private readonly object _gate = new();
         private readonly List<(DateTime T, double P)> _s = new();
+        private double _last = double.NaN;
+        private DateTime _changedAt = DateTime.MinValue;
+        private double _step = double.NaN;
+
+        /// <summary>When the value last CHANGED, not merely when it was sampled, and by how much (new - old).
+        /// (MinValue, NaN) until a change has been seen.</summary>
+        public (DateTime At, double Step) LastChange() { lock (_gate) return (_changedAt, _step); }
 
         public void Add(DateTime t, double p, TimeSpan keep)
         {
             lock (_gate)
             {
+                // CHANGE DETECTION RUNS BEFORE THE SAMPLING FLOOR. A tick 100ms after a sample is dropped
+                // from the series below, but it must still move the change clock - or a price that changed
+                // a moment ago would be reported as unchanged since the last kept sample.
+                if (!double.IsNaN(_last) && Math.Abs(p - _last) > 1e-9) { _changedAt = t; _step = p - _last; }
+                _last = p;
                 // FIXED 250ms SAMPLING FLOOR, not a value-change trigger. Screening fires far faster than
                 // the oracle updates — many times a second on a busy book — and an unbounded append rate
                 // lets the count cap below truncate the buffer to span LESS than the window it must cover.
@@ -583,6 +600,7 @@ public sealed class EvEvaluator
             {
                 _cooldownLogged.TryRemove($"{t}|{side}", out _);
                 _armedEv.TryRemove($"{t}|{side}", out _);
+                _kask.TryRemove($"{t}|{side}", out _);
             }
         }
         foreach (var kv in fresh) _byTicker[kv.Key] = kv.Value;
@@ -631,11 +649,27 @@ public sealed class EvEvaluator
                                    double Vig, double ShinZ, double PinMine, double PinOther, double PinSum,
                                    double OracleAgeMs, double OracleDepth, bool InPlay,
                                    decimal WsAsk, decimal WsDepth, double WsBookAge, double EvWs,
-                                   int NumLegs, string PinOddsAll, bool WsVerified);
+                                   int NumLegs, string PinOddsAll, bool WsVerified,
+                                   DateTime PinChangedUtc, DateTime PinStatusUtc);
 
     private async Task EvaluateAsync(string ticker, CancellationToken ct)
     {
         if (!_byTicker.TryGetValue(ticker, out var pair)) return;
+
+        // KALSHI'S OWN PRICE PATH, sampled on EVERY evaluation and BEFORE Screen can return early. Screen stops
+        // at a suspended Pinnacle quote - and in-play tennis suspends during every point, which is exactly when
+        // Kalshi reprices - so sampling inside it would leave a hole at the one moment this history exists to
+        // cover. Memory only, logged only: it feeds the KalshiMove*/KalshiChangeAgeMs telemetry and gates nothing.
+        var top0 = _feed.Top(ticker);
+        if (top0.HasSnapshot)
+        {
+            var t0 = DateTime.UtcNow;
+            var keep0 = TimeSpan.FromSeconds(30);
+            if (top0.YesAsk > 0m && top0.YesAsk < 1m)
+                _kask.GetOrAdd($"{ticker}|YES", _ => new PTrueTrack()).Add(t0, (double)top0.YesAsk, keep0);
+            if (top0.NoAsk > 0m && top0.NoAsk < 1m)
+                _kask.GetOrAdd($"{ticker}|NO", _ => new PTrueTrack()).Add(t0, (double)top0.NoAsk, keep0);
+        }
 
         var candidates = new List<Screened>(2);
         foreach (string side in new[] { "YES", "NO" })
@@ -841,7 +875,9 @@ public sealed class EvEvaluator
                             wsAsk, yes ? top.YesAskDepth : top.NoAskDepth, top.AgeMs, evWs,
                             odds.Length,
                             string.Join(";", odds.Select(o => o.ToString("0.####", CultureInfo.InvariantCulture))),
-                            quotes.All(q => q.WsVerified));
+                            quotes.All(q => q.WsVerified),
+                            // the de-vigged price moves when ANY leg moves, so its age is the youngest leg's
+                            quotes.Max(q => q.OddsChangedUtc), quotes.Max(q => q.StatusChangedUtc));
     }
 
     /// <summary>Values a screened candidate at the REST ask, sizes it, and logs it — signal or not.
@@ -1168,6 +1204,31 @@ public sealed class EvEvaluator
                 pair.YesLegIndex, decision, regime, px, c.PTrueUsed, ev, _cfg.DeVigMethod,
                 depthUnknown ? -1 : depthToLimit));
 
+        // ── HOW OLD WAS EACH PRICE (logged only, 2026-10-05) ──────────────────────────────────────────────
+        // 5.7% of signals were bought on a Pinnacle price that snapped >=10c against us within 10 seconds -
+        // Kalshi had seen the point first - and they carried a third of the winner's curse while looking like
+        // every other signal on the columns above. These are the columns that might tell them apart: when
+        // Pinnacle's open price last moved (and by how much, our side), when it last opened or suspended, and
+        // what Kalshi's ask did in the seconds before. All in memory already; nothing here gates a trade.
+        var ageNow = DateTime.UtcNow;
+        string ageKey = $"{pair.KalshiTicker}|{c.Side}";
+        double pinMoveAgeMs   = c.PinChangedUtc == DateTime.MinValue ? double.NaN : (ageNow - c.PinChangedUtc).TotalMilliseconds;
+        double pinStatusAgeMs = c.PinStatusUtc  == DateTime.MinValue ? double.NaN : (ageNow - c.PinStatusUtc).TotalMilliseconds;
+        double pinLastStep = double.NaN;
+        if (_ptrue.TryGetValue(ageKey, out var ptTrack))
+        {
+            var ptLc = ptTrack.LastChange();
+            if (ptLc.At != DateTime.MinValue) pinLastStep = ptLc.Step * 100;
+        }
+        double kMove2s = double.NaN, kMove10s = double.NaN, kChangeAgeMs = double.NaN;
+        if (_kask.TryGetValue(ageKey, out var kaTrack))
+        {
+            if (kaTrack.TryRise(ageNow, TimeSpan.FromSeconds(2), out double k2v))  kMove2s  = k2v * 100;
+            if (kaTrack.TryRise(ageNow, TimeSpan.FromSeconds(10), out double k10v)) kMove10s = k10v * 100;
+            var kaLc = kaTrack.LastChange();
+            if (kaLc.At != DateTime.MinValue) kChangeAgeMs = (ageNow - kaLc.At).TotalMilliseconds;
+        }
+
         _telemetry.Write(new EvSignal(
             DateTime.UtcNow, pair.KalshiTicker, pair.EventId, c.Side, pair.KalshiOutcome, pair.EventTitle,
             pair.SettlementDate, c.InPlay,
@@ -1188,7 +1249,8 @@ public sealed class EvEvaluator
                           : prematch ? "SIGNAL_PREMATCH" : "SIGNAL_UNVERIFIED",
             c.NumLegs, c.PinOddsAll, c.WsVerified, depthToLimit, capacityUsd, regime, venueVerify,
             haveKinetic ? kineticRise * 100 : double.NaN, devigAgree,
-            pair.MarketType, pair.Line, !pair.IsDerivative || _cfg.LiveDerivatives));
+            pair.MarketType, pair.Line, !pair.IsDerivative || _cfg.LiveDerivatives,
+            pinMoveAgeMs, pinLastStep, pinStatusAgeMs, kMove2s, kMove10s, kChangeAgeMs));
 
         if (clears)
         {

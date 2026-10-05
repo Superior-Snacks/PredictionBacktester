@@ -73,7 +73,7 @@ def radar_only(out: str) -> tuple[str, bool]:
     L = [f"📡 **EV radar** (last 200 fills) · {dt.datetime.now():%a %H:%M}"]
     for tag, name, rest in radar:
         rest = clean(rest)
-        rest = re.sub(r"\s*\((?:lifetime|red =|n=\d+; green|n=\d+; red|green >=)[^)]*\)\s*$", "", rest)
+        rest = re.sub(r"\s*\((?:lifetime|red =|n=\d+; green|n=\d+[^)]*; red|green >=)[^)]*\)\s*$", "", rest)
         icon = {"OK": "🟢", "WATCH": "🟡", "STOP": "🔴"}[tag]
         if tag == "STOP":
             bad = True
@@ -190,7 +190,7 @@ def digest(out: str) -> tuple[str, bool]:
         L.append("**RADAR** (last 200 fills)")
         for tag, name, rest in radar:
             rest = clean(rest)
-            rest = re.sub(r"\s*\((?:lifetime|red =|n=\d+; green|n=\d+; red|green >=)[^)]*\)\s*$", "", rest)   # drop the legend
+            rest = re.sub(r"\s*\((?:lifetime|red =|n=\d+; green|n=\d+[^)]*; red|green >=)[^)]*\)\s*$", "", rest)   # drop the legend
             icon = {"OK": "🟢", "WATCH": "🟡", "STOP": "🔴"}[tag]
             if tag == "STOP":
                 bad = True
