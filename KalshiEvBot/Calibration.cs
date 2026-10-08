@@ -238,16 +238,12 @@ public static class Calibration
                         ?? g.OrderBy(o => o.At).First())
               .ToList();
 
-    /// <summary>Coarse sport from the Kalshi series. A heuristic, and deliberately a visible one: an
-    /// unrecognised series reads "other" rather than being silently folded into soccer.</summary>
-    public static string Sport(string ticker)
-    {
-        string t = ticker.ToUpperInvariant();
-        if (t.Contains("ATP") || t.Contains("WTA") || t.Contains("ITF")) return "tennis";
-        if (t.Contains("MLB") || t.Contains("KBO") || t.Contains("NPB") || t.Contains("LMB")) return "baseball";
-        if (t.Contains("GAME")) return "soccer";
-        return "other";
-    }
+    /// <summary>Coarse sport from the Kalshi series — <see cref="EvSports.Of"/>, the same function the live-sport
+    /// gate routes on, so the report and the router can never disagree about a market. Since 2026-10-08 it
+    /// reads the SERIES, not the whole ticker: the old whole-ticker match filed 5 soccer markets as tennis
+    /// because their team codes contained "ATP" (WATPET, KATPLO), and it would have filed every NFL market
+    /// under soccer, the retired sport.</summary>
+    public static string Sport(string ticker) => EvSports.Of(ticker);
 
 
     /// <summary>Cross-checks every SIGNAL ticker's Kalshi outcome name against the Pinnacle selection name

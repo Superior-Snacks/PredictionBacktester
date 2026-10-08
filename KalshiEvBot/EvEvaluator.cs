@@ -89,6 +89,11 @@ public sealed class EvConfig
     /// only the order is withheld. Flip this once <c>--resolve</c> has a derivative sample worth
     /// reading — the split is in the telemetry's <c>MarketType</c> column.</para></summary>
     public bool   LiveDerivatives = Env("EV_LIVE_DERIVATIVES", 0) > 0.5;
+    /// <summary>Sports allowed to place LIVE orders (EV_LIVE_SPORTS, default tennis). Every other moneyline
+    /// is routed to the SHADOW pipeline at load and reload, and held at the order as a second line — see
+    /// <see cref="EvSports"/>. Never mutated after construction; the clones still take their own copy.</summary>
+    public HashSet<string> LiveSports = EvSports.ParseLive(Environment.GetEnvironmentVariable("EV_LIVE_SPORTS"));
+    public bool IsLiveSport(string ticker) => LiveSports.Contains(EvSports.Of(ticker));
     /// <summary>How far below EvMin a WS-implied EV may sit and still buy a REST call. The WS ask is
     /// optimistic 95% of the time, which makes WS EV an upper bound and pre-screening safe; this slack
     /// covers the other 5%.</summary>
@@ -206,12 +211,13 @@ public sealed class EvConfig
     /// says something, one variable at a time.</para>
     ///
     /// <para>MemberwiseClone is safe here: every field is a value type bar `DeVigMethod`, which is a string
-    /// and immutable. Adding a mutable reference field to this class would silently share it between the
-    /// two pipelines, so give it its own copy below if that ever happens.</para>
+    /// and immutable, and `LiveSports`, which is given its own copy below. Adding another mutable reference
+    /// field to this class would silently share it between the pipelines, so copy it here too.</para>
     /// </summary>
     public EvConfig CloneForDerivatives()
     {
         var d = (EvConfig)MemberwiseClone();
+        d.LiveSports = new HashSet<string>(LiveSports, StringComparer.OrdinalIgnoreCase);
         string? S(string k) => Environment.GetEnvironmentVariable(k);
 
         d.EvMin          = Env("EV_DERIV_MIN",                    EvMin);
@@ -263,6 +269,26 @@ public sealed class EvConfig
         return d;
     }
 
+    /// <summary>
+    /// The SHADOW pipeline's config (2026-10-08): moneylines of sports not in EV_LIVE_SPORTS. An exact copy
+    /// of the moneyline's thresholds and guards, so a new sport's first numbers compare like for like with
+    /// tennis; divergence is opted into later, one variable at a time, as with derivatives.
+    ///
+    /// <para>Two fields differ. <c>Live</c> is false ALWAYS: this pipeline has no executor and never will —
+    /// a sport goes live by being named in EV_LIVE_SPORTS, which moves it to the main pipeline. And REST
+    /// concurrency defaults to 1, for the reason spelled out in <see cref="CloneForDerivatives"/>: Kalshi's
+    /// rate limit is per account, the shadow sits on no fill path, and tennis — which does — must not queue
+    /// behind it. One call at ~150ms is still several valuations a second.</para>
+    /// </summary>
+    public EvConfig CloneForShadow()
+    {
+        var s = (EvConfig)MemberwiseClone();
+        s.LiveSports = new HashSet<string>(LiveSports, StringComparer.OrdinalIgnoreCase);
+        s.RestConcurrency = Math.Max(1, (int)Env("EV_SHADOW_REST_CONCURRENCY", 1));
+        s.Live = false;
+        return s;
+    }
+
     public static double Env(string k, double dflt)
         => double.TryParse(Environment.GetEnvironmentVariable(k), NumberStyles.Any,
                            CultureInfo.InvariantCulture, out var v) ? v : dflt;
@@ -286,6 +312,10 @@ public sealed class EvStats
                 // row is a good signal by every test the bot has, and this number is the size of
                 // the sample being deliberately left on the table while they prove out.
                 DerivativeHeld,
+                // Signals held because their sport is not in EV_LIVE_SPORTS. On the shadow pipeline this is
+                // simply its signal count; on a LIVE pipeline it should read 0 forever — anything else means
+                // a non-live sport was routed to a pipeline that can trade, and the second gate caught it.
+                SportHeld,
                 // Signals Kelly priced below the floor (no bet) and signals cut by the ceiling. Neither
                 // over-bets; together they say how much of the flow the BOUNDS decided rather than Kelly.
                 KellyBelowFloor, KellyClampedDown,
@@ -1094,6 +1124,14 @@ public sealed class EvEvaluator
             Interlocked.Increment(ref Stats.DerivativeHeld);
             liveNote = "  [held: derivative, EV_LIVE_DERIVATIVES=0]";
         }
+        // THE SPORT GATE'S SECOND LINE. Routing already keeps non-live sports on the shadow pipeline, which
+        // has no executor at all; this catches one that reaches a LIVE evaluator by any other path — a
+        // routing bug, a reload race — at the last point before money could follow it.
+        else if (signal && !_cfg.IsLiveSport(pair.KalshiTicker))
+        {
+            Interlocked.Increment(ref Stats.SportHeld);
+            liveNote = $"  [held: shadow sport ({EvSports.Of(pair.KalshiTicker)}), not in EV_LIVE_SPORTS]";
+        }
         else if (signal && _live is not null)
         {
             // KELLY SIZES OFF REAL EQUITY. `size` above used the PINNED bankroll and stays that way: it is
@@ -1249,7 +1287,8 @@ public sealed class EvEvaluator
                           : prematch ? "SIGNAL_PREMATCH" : "SIGNAL_UNVERIFIED",
             c.NumLegs, c.PinOddsAll, c.WsVerified, depthToLimit, capacityUsd, regime, venueVerify,
             haveKinetic ? kineticRise * 100 : double.NaN, devigAgree,
-            pair.MarketType, pair.Line, !pair.IsDerivative || _cfg.LiveDerivatives,
+            pair.MarketType, pair.Line,
+            (!pair.IsDerivative || _cfg.LiveDerivatives) && _cfg.IsLiveSport(pair.KalshiTicker),
             pinMoveAgeMs, pinLastStep, pinStatusAgeMs, kMove2s, kMove10s, kChangeAgeMs));
 
         if (clears)

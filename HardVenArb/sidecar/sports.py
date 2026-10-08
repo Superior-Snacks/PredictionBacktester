@@ -109,7 +109,12 @@ CATALOG: dict[str, Sport] = {
         bia_sport="basket", bia_path="/sportsbook/basketball", enabled=False,
     ),
     "amfootball": Sport(
-        key="amfootball", pinnacle_id=0, duration_min=240,
+        # pinnacle_id 15 = Pinnacle's "Football" (added 2026-10-08 for KalshiEvBot SHADOW telemetry; the EV
+        # bot holds every sport outside EV_LIVE_SPORTS observe-only). NOT yet confirmed against a live
+        # /sports read - the first pairing run confirms it, and safely: pairing anchors each Kalshi series on
+        # the catalog's sport NAME (pair_auto SERIES_SPORT: KXNFLGAME -> "FOOTBALL"), so a wrong id yields
+        # 0 pairs, never a wrong pair.
+        key="amfootball", pinnacle_id=15, duration_min=240,
         moneyline=("KXNFLGAME", "KXNCAAFGAME", "KXCFLGAME"),
         bia_sport="af", bia_path="/sportsbook/american-football", enabled=False,
     ),

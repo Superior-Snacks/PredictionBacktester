@@ -678,6 +678,105 @@ public static class SelfTest
             }
         }
 
+        // -- THE LIVE-SPORT GATE (2026-10-08) ------------------------------------------------------
+        // The bot hot-reloads cross_pairs.json and trades what is in it, so widening the pairer to a new sport
+        // would have a running bot buying it within minutes. These pin what prevents that — the classifier, the
+        // router both startup and reload use, and a shadow config that cannot go live — plus the file naming
+        // that keeps shadow rows out of the tennis report, and the two fixes that rode in with it.
+        {
+            string? savedLive = Environment.GetEnvironmentVariable("EV_LIVE_SPORTS");
+            try
+            {
+                // THE CLASSIFIER reads the SERIES, never the whole ticker.
+                Check(EvSports.Of("KXNFLGAME-26OCT11KCBUF-KC") == "football", "an NFL market is football");
+                Check(EvSports.Of("KXNCAAFGAME-26OCT10ALAUGA-ALA") == "football", "an NCAAF market is football");
+                Check(EvSports.Of("KXMLBGAME-26OCT08NYYTOR-NYY") == "baseball", "an MLB market is baseball");
+                Check(EvSports.Of("KXKBOGAME-26OCT08LGSSG-LG") == "baseball", "a KBO market is baseball");
+                Check(EvSports.Of("KXITFWMATCH-26OCT08ABBKAM-ABB") == "tennis", "an ITF women's match is tennis");
+                Check(EvSports.Of("KXATPGTOTAL-X-39") == "tennis", "a tennis games total is tennis");
+                Check(EvSports.Of("KXEPLGAME-26OCT04ARSCHE-ARS") == "soccer", "an EPL game is still soccer");
+                Check(EvSports.Of("KXEFLCUPGAME-26AUG25WATPET-WAT") == "soccer",
+                      "a team code containing ATP no longer makes a soccer game tennis (old whole-ticker bug)");
+                Check(EvSports.Of("KXNHLGAME-26OCT08BOSTOR-BOS") == "hockey", "an NHL market is hockey");
+                Check(EvSports.Of("KXSOMETHINGNEW-X") == "other", "an unknown series reads other, not soccer");
+                Check(Calibration.Sport("KXNFLGAME-26OCT11KCBUF-KC") == "football",
+                      "the report's Sport() is the router's function, so the two cannot disagree");
+
+                // EV_LIVE_SPORTS: unset means TENNIS ONLY, so a new sport is shadow by default.
+                Check(EvSports.ParseLive(null).SetEquals(new[] { "tennis" }), "unset EV_LIVE_SPORTS = tennis only");
+                Check(EvSports.ParseLive("  ").SetEquals(new[] { "tennis" }), "blank EV_LIVE_SPORTS = tennis only");
+                Check(EvSports.ParseLive("tennis, Baseball").SetEquals(new[] { "tennis", "baseball" }),
+                      "a list is parsed, trimmed and lower-cased");
+
+                Environment.SetEnvironmentVariable("EV_LIVE_SPORTS", null);
+                var cfgG = new EvConfig { Live = true };
+                Check(cfgG.IsLiveSport("KXATPMATCH-X-A") && !cfgG.IsLiveSport("KXNFLGAME-X-KC")
+                      && !cfgG.IsLiveSport("KXMLBGAME-X-NYY"),
+                      "by default tennis is live and football/baseball are not, even with --live");
+
+                // THE ROUTER. Startup and every reload go through this one function.
+                EvPair P(string tk, string type = "moneyline") =>
+                    new(tk, tk.Split('-')[0] + "-EVT", "A vs B", "", "", "2026-10-08", "1:2:a", "1:2:b",
+                        "A", "B", false, new[] { "1:2:a", "1:2:b" }, type);
+                var (mlG, shG, dvG) = EvSports.SplitPipelines(new[]
+                {
+                    P("KXATPMATCH-X-A"), P("KXNFLGAME-X-KC"), P("KXMLBGAME-X-NYY"), P("KXATPGTOTAL-X-39", "total"),
+                }, cfgG);
+                Check(mlG.Count == 1 && mlG[0].KalshiTicker.StartsWith("KXATPMATCH"),
+                      "only the tennis moneyline reaches the LIVE pipeline",
+                      string.Join(",", mlG.Select(x => x.KalshiTicker)));
+                Check(shG.Count == 2 && shG.All(x => !cfgG.IsLiveSport(x.KalshiTicker)),
+                      "football and baseball go to the SHADOW pipeline", $"{shG.Count}");
+                Check(dvG.Count == 1 && dvG[0].IsDerivative, "a derivative still goes to its own pipeline");
+
+                Environment.SetEnvironmentVariable("EV_LIVE_SPORTS", "tennis,football");
+                var (mlF, shF, _) = EvSports.SplitPipelines(new[] { P("KXNFLGAME-X-KC"), P("KXMLBGAME-X-NYY") },
+                                                            new EvConfig());
+                Check(mlF.Count == 1 && shF.Count == 1 && mlF[0].KalshiTicker.StartsWith("KXNFL"),
+                      "naming a sport in EV_LIVE_SPORTS is the ONLY thing that moves it to live");
+
+                // THE SHADOW CONFIG cannot trade, whatever the moneyline is doing.
+                var sh = new EvConfig { Live = true, RestConcurrency = 4 }.CloneForShadow();
+                Check(!sh.Live, "--live does NOT make the shadow pipeline live");
+                Check(sh.RestConcurrency < 4, "shadow REST concurrency does not inherit - tennis keeps its share",
+                      $"{sh.RestConcurrency}");
+                Check(!ReferenceEquals(sh.LiveSports, cfgG.LiveSports) && sh.MinPrice == cfgG.MinPrice,
+                      "the shadow clone has its own LiveSports set and tennis's thresholds");
+
+                // FILE NAMES keep the tennis --resolve blind to shadow rows: no default glob matches them.
+                foreach (var (file, glob) in new[]
+                {
+                    ("EvShadowTelemetry_20261008.csv", "EvTelemetry_"), ("EvShadowOracleSnap_20261008.csv", "EvOracleSnap_"),
+                    ("EvShadowFollowUp_20261008.csv", "EvFollowUp_"),   ("EvShadowLive_20261008.csv", "EvLive_"),
+                })
+                    Check(!file.StartsWith(glob), $"{file.Split('_')[0]} does not match the tennis {glob}* glob");
+
+                // LAZY FILES: a tennis-only day must leave no header-only shadow file behind.
+                string tmp = Path.Combine(Path.GetTempPath(), "evlazy_" + Guid.NewGuid().ToString("N"));
+                try
+                {
+                    var lz = new RollingCsv(tmp, "EvShadowTelemetry", new[] { "A", "B" }, lazy: true);
+                    Check(Directory.GetFiles(tmp).Length == 0 && lz.Path == "",
+                          "a lazy log creates no file until its first row");
+                    lz.WriteRow(new[] { "1", "2" });
+                    string lzPath = lz.Path;
+                    lz.Dispose();                   // the writer holds the file open; read it after
+                    Check(Directory.GetFiles(tmp).Length == 1 && File.ReadAllLines(lzPath).Length == 2,
+                          "…and its first row creates it, header included");
+                }
+                finally { try { Directory.Delete(tmp, true); } catch { } }
+
+                // THE SNAPSHOT REGRESSION: a reload must refresh the SAME list the snapshot loop holds. Until
+                // 2026-10-08 it held a startup copy, and fixtures added by reload were never snapshotted.
+                var held = new List<EvPair> { P("KXATPMATCH-OLD-A") };
+                var alias = held;
+                Program.ReplaceContents(held, new[] { P("KXATPMATCH-NEW-A"), P("KXATPMATCH-NEW2-A") });
+                Check(ReferenceEquals(held, alias) && held.Count == 2 && held.All(x => x.KalshiTicker.Contains("NEW")),
+                      "a reload refreshes the SAME list instance the snapshot loop holds");
+            }
+            finally { Environment.SetEnvironmentVariable("EV_LIVE_SPORTS", savedLive); }
+        }
+
         // -- THE KINETIC FILTER --------------------------------------------------------------------
         // The guard's value rests entirely on TryRise refusing to answer when it cannot: a window it has no
         // samples for must NOT read as "flat", or a market we just started watching passes a filter that has

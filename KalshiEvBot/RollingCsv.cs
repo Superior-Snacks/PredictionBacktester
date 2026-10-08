@@ -27,14 +27,17 @@ public sealed class RollingCsv : IDisposable
     public string Path { get; private set; } = "";
     public long RowsWritten { get; private set; }
 
-    public RollingCsv(string directory, string filePrefix, string[] columns)
+    /// <param name="lazy">Create the file on the FIRST ROW rather than now (Path reads "" until then). For a
+    /// pipeline that usually has nothing to log — the shadow one, whose pairs arrive by reload — so a quiet day
+    /// leaves no header-only file behind. WriteRow already rolls on every call, which is all lazy needs.</param>
+    public RollingCsv(string directory, string filePrefix, string[] columns, bool lazy = false)
     {
         _dir    = directory;
         _prefix = filePrefix;
         _header = string.Join(",", columns);
         _arity  = columns.Length;
         Directory.CreateDirectory(_dir);
-        Roll(DateTime.UtcNow);
+        if (!lazy) Roll(DateTime.UtcNow);
     }
 
     private void Roll(DateTime utc)

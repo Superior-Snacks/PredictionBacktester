@@ -117,20 +117,26 @@ internal static class Program
         // --resolve-deriv grades the DERIVATIVE pipeline, over its own files. The two never mix: the
         // default glob is "EvTelemetry_*.csv", and "EvDerivTelemetry_..." does not match it, so the
         // separation holds by NAMING rather than by a filter somebody could forget to apply.
-        if (args.Contains("--resolve") || args.Contains("--resolve-deriv"))
+        if (args.Contains("--resolve") || args.Contains("--resolve-deriv") || args.Contains("--resolve-shadow"))
         {
-            bool deriv = args.Contains("--resolve-deriv");
-            // The derivative pattern pair MIRRORS the moneyline default rather than widening to
-            // "EvDeriv*". A wildcard there also matches EvDerivLive_ and EvDerivFollowUp_, whose
-            // columns are different — those rows would parse as telemetry and be counted as
-            // observations, quietly inflating the very dataset this report exists to grade.
+            // The pipeline names the FILES: "" -> EvTelemetry_*, "Deriv" -> EvDerivTelemetry_*, "Shadow" ->
+            // EvShadowTelemetry_*. Each pattern pair MIRRORS the moneyline default rather than widening to
+            // "EvDeriv*": a wildcard there also matches EvDerivLive_ and EvDerivFollowUp_, whose columns are
+            // different — those rows would parse as telemetry and be counted as observations, quietly
+            // inflating the very dataset this report exists to grade.
+            string pipe = args.Contains("--resolve-deriv") ? "Deriv" : args.Contains("--resolve-shadow") ? "Shadow" : "";
             string? g = ArgValue(args, "--resolve-glob");
-            if (deriv)
+            if (pipe == "Deriv")
                 Console.WriteLine("[RESOLVE] DERIVATIVES ONLY (spread/total). These are a separate "
                                 + "pipeline with its own thresholds; none of the moneyline calibration "
                                 + "transfers, so read this on its own terms.");
+            if (pipe == "Shadow")
+                Console.WriteLine("[RESOLVE] SHADOW SPORTS ONLY (not in EV_LIVE_SPORTS - observed, never traded). "
+                                + "Same thresholds as tennis, so the numbers compare like for like - but every "
+                                + "sport is its own test: read 4d BY SPORT, and nothing here says anything about "
+                                + "tennis. There are no fills, so the fill-based sections are empty by design.");
             using var rk = new KalshiOrderClient(config);
-            return await ResolveAsync(rk, g, !args.Contains("--all-obs"), deriv);
+            return await ResolveAsync(rk, g, !args.Contains("--all-obs"), pipe);
         }
 
         string? pairsPath = EvPairLoader.Locate(pairsArg);
@@ -239,6 +245,19 @@ internal static class Program
         }
 
         var cfg = new EvConfig();
+
+        // ── THE LIVE-SPORT GATE (2026-10-08) ──────────────────────────────────────────────────────────
+        // Moneylines of sports outside EV_LIVE_SPORTS go to the SHADOW pipeline below — or, with
+        // EV_SHADOW=0, are dropped here, BEFORE the subscription lists are built, so a sport nobody is
+        // watching costs no Kalshi subscription and, more to the point, no Pinnacle league socket.
+        bool shadowOn = EvConfig.Env("EV_SHADOW", 1) > 0.5;
+        if (!shadowOn)
+        {
+            int nGone = pairs.RemoveAll(p => !p.IsDerivative && !cfg.IsLiveSport(p.KalshiTicker));
+            if (nGone > 0)
+                Console.WriteLine($"[SHADOW ] {nGone} pair(s) of sports outside EV_LIVE_SPORTS dropped (EV_SHADOW=0).");
+        }
+
         string sidecar = ArgValue(args, "--sidecar")
                       ?? Environment.GetEnvironmentVariable("HARDVEN_SIDECAR_URL")
                       ?? "http://127.0.0.1:8787";
@@ -280,8 +299,11 @@ internal static class Program
         // rather than two overlapping ones, and both pipelines read the same quote for the same token
         // by definition. What is NOT shared is what each does with it — de-vig method, thresholds and
         // every guard come from `cfgD`.
-        var mlPairs = pairs.Where(p => !p.IsDerivative).ToList();
-        var dvPairs = pairs.Where(p =>  p.IsDerivative).ToList();
+        // THREE since 2026-10-08: the shadow pipeline takes moneylines of sports outside EV_LIVE_SPORTS. The
+        // reload loop routes with the same function, and refreshes these three lists IN PLACE — the snapshot
+        // loops hold them, and a frozen startup copy is how the moneyline snapshots silently stopped covering
+        // every fixture added after a restart (fixed in the same change).
+        var (mlPairs, shPairs, dvPairs) = EvSports.SplitPipelines(pairs, cfg);
 
         var eval   = new EvEvaluator(mlPairs, oracle, feed, kalshi, telemetry, cfg) { Verbose = verbose };
         EvLiveLog? liveLog = null;
@@ -341,6 +363,34 @@ internal static class Program
                                 + "to trade them. Read --resolve-deriv first.");
         }
 
+        // ── THE SHADOW PIPELINE (2026-10-08) ──────────────────────────────────────────────────────────
+        // Moneylines of sports outside EV_LIVE_SPORTS, watched to collect a sport's evidence before a cent
+        // goes on it. Its own evaluator, config (CloneForShadow: tennis's thresholds, never live), telemetry,
+        // snapshot and follow-up files — nothing it logs can reach the tennis --resolve; read it with
+        // --resolve-shadow — and NO executor, ever. A sport trades only by being named in EV_LIVE_SPORTS.
+        //
+        // Built whenever EV_SHADOW is on, even with nothing to watch yet: shadow pairs normally ARRIVE by
+        // hot-reload once the pairing job is widened. Its files are created on the first row (lazy), so a
+        // tennis-only day leaves nothing behind. No cooldown or error log: both are read as TENNIS evidence.
+        var cfgS = cfg.CloneForShadow();
+        EvTelemetry?       telemetryS = shadowOn ? new EvTelemetry(prefix: "EvShadowTelemetry", lazy: true) : null;
+        OracleSnapshotLog? snapshotsS = shadowOn ? new OracleSnapshotLog(prefix: "EvShadowOracleSnap", lazy: true) : null;
+        FollowUpTracker?   followUpS  = shadowOn ? new FollowUpTracker(oracle, feed, prefix: "EvShadowFollowUp", lazy: true) : null;
+        using var _st = telemetryS; using var _ss = snapshotsS; using var _sf = followUpS;
+
+        EvEvaluator? evalS = null;
+        if (telemetryS is not null)
+        {
+            evalS = new EvEvaluator(shPairs, oracle, feed, kalshi, telemetryS, cfgS)
+                    { Verbose = verbose, Label = "SHADOW" };
+            evalS.SetFollowUp(followUpS!);
+            string mix = string.Join(", ", shPairs.GroupBy(p => EvSports.Of(p.KalshiTicker))
+                                                  .Select(g => $"{g.Key} {g.Count()}"));
+            Console.WriteLine($"[SHADOW ] {shPairs.Count} pair(s){(mix.Length > 0 ? $" ({mix})" : "")} — OBSERVE-ONLY. "
+                            + $"Live sports: {string.Join(",", cfg.LiveSports)} (EV_LIVE_SPORTS). Files EvShadow*_<date>.csv "
+                            + "from the first row; graded by --resolve-shadow.");
+        }
+
         kalshi.RateLimitRetryLogger = i =>
         {
             Interlocked.Increment(ref eval.Stats.RateLimited);
@@ -370,12 +420,14 @@ internal static class Program
         catch { /* leave at 0; the bankroll line prints which shard it used */ }
         await eval.PrimeFeeMultipliersAsync(cts.Token);
         if (evalD is not null) await evalD.PrimeFeeMultipliersAsync(cts.Token);
+        if (evalS is not null) await evalS.PrimeFeeMultipliersAsync(cts.Token);
 
         var feedTask   = feed.RunAsync(cts.Token);
         var oracleTask = oracle.RunAsync(cts.Token);
         var evalTask   = eval.RunAsync(cts.Token);
         evalD?.SetErrorLog(errorLog);
         var evalDTask  = evalD?.RunAsync(cts.Token) ?? Task.CompletedTask;
+        var evalSTask  = evalS?.RunAsync(cts.Token) ?? Task.CompletedTask;
 
         // Both triggers feed the same queue. Kalshi ticking is one source of signals; Pinnacle moving is
         // the other, and a bot woken only by Kalshi would never see the second kind at all.
@@ -387,6 +439,11 @@ internal static class Program
         {
             feed.OnBookChanged += evalD.Nudge;
             oracle.OnPolled    += evalD.SweepAll;
+        }
+        if (evalS is not null)
+        {
+            feed.OnBookChanged += evalS.Nudge;
+            oracle.OnPolled    += evalS.SweepAll;
         }
 
         // ── Discord: report and remote control ───────────────────────────────────────────────────
@@ -555,9 +612,10 @@ internal static class Program
         if (discord.Enabled && EvConfig.Env("EV_REPORT_AFTER_BLOCKS", 1) > 0)
             _ = Task.Run(() => FinalBlockReportLoopAsync(sidecar, discord, RunReportAsync, cts.Token));
 
-        // ONE balance read, mirrored to the derivative pipeline. Two independent reads would drift apart
-        // and the two telemetry files would stop being comparable — the one thing the split must not cost.
-        await RefreshBankrollAsync(kalshi, eval, cfg, announce: true, mirror: evalD);
+        // ONE balance read, mirrored to the derivative and shadow pipelines. Independent reads would drift
+        // apart and the telemetry files would stop being comparable — the one thing the split must not cost.
+        var mirrors = new[] { evalD, evalS };
+        await RefreshBankrollAsync(kalshi, eval, cfg, announce: true, mirrors: mirrors);
 
         // ── KELLY PREFLIGHT ───────────────────────────────────────────────────────────────────────────
         // A floor set above what Kelly can ever ask for does not throw, log, or fail a health check — the
@@ -599,12 +657,20 @@ internal static class Program
                   + "will be refused, not resized. Expect far fewer bets than signals — that is the floor "
                   + "gating flow, not the strategy finding nothing.");
         }
-        var bankrollTask = BankrollLoopAsync(kalshi, eval, cfg, cts.Token, evalD);
+        var bankrollTask = BankrollLoopAsync(kalshi, eval, cfg, cts.Token, mirrors);
         var snapTask     = SnapshotLoopAsync(snapshots, oracle, feed, mlPairs, cfg, cts.Token);
         var snapDTask    = snapshotsD is not null
                          ? SnapshotLoopAsync(snapshotsD, oracle, feed, dvPairs, cfgD, cts.Token)
                          : Task.CompletedTask;
+        var snapSTask    = snapshotsS is not null
+                         ? SnapshotLoopAsync(snapshotsS, oracle, feed, shPairs, cfgS, cts.Token)
+                         : Task.CompletedTask;
         var followTask   = followUp.RunAsync(cts.Token);
+        // The side pipelines' trackers must be RUN, not just built. Schedule() only enqueues; RunAsync is
+        // what writes. The derivative tracker was never started — every EvDerivFollowUp file to 2026-10-08
+        // is header-only while its queue grew for the life of the process.
+        var followDTask  = followUpD?.RunAsync(cts.Token) ?? Task.CompletedTask;
+        var followSTask  = followUpS?.RunAsync(cts.Token) ?? Task.CompletedTask;
 
         // Bank settlements WHILE THE BOT RUNS. Kalshi does not keep obscure markets available forever, so
         // resolving days later is a race we can only lose — and lose silently, since a purged market is
@@ -619,8 +685,8 @@ internal static class Program
             () => { lock (pairsLock) return everSeen.ToList(); }, cts.Token);
 
         // Pick up new fixtures without a restart — see PairReloadLoopAsync for why this is not optional.
-        var reloadTask = PairReloadLoopAsync(pairsPath, derivPath, eval, evalD, feed, oracle, pairs,
-                                             everSeen, pairsLock, cts.Token);
+        var reloadTask = PairReloadLoopAsync(pairsPath, derivPath, cfg, eval, evalD, evalS, feed, oracle, pairs,
+                                             mlPairs, dvPairs, shPairs, everSeen, pairsLock, cts.Token);
 
         if (args.Contains("--verify"))
         {
@@ -674,13 +740,12 @@ internal static class Program
     /// including while another bot holds the account's single socket.
     /// </summary>
     private static async Task<int> ResolveAsync(KalshiOrderClient kalshi, string? glob, bool dedupe,
-                                                bool deriv = false)
+                                                string pipe = "")
     {
         string dir = Directory.GetCurrentDirectory();
         var files = new List<string>();
         var patterns = glob is not null ? new[] { glob }
-                     : deriv ? new[] { "EvDerivTelemetry_*.csv", "EvDerivOracleSnap_*.csv" }
-                     :         new[] { "EvTelemetry_*.csv", "EvOracleSnap_*.csv" };
+                     : new[] { $"Ev{pipe}Telemetry_*.csv", $"Ev{pipe}OracleSnap_*.csv" };
         foreach (var pattern in patterns)
             files.AddRange(Directory.GetFiles(dir, pattern));
         files = files.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(f => f).ToList();
@@ -748,7 +813,7 @@ internal static class Program
         // Attempts the venue refused, so Finalize can set aside the signals behind them (the window catches
         // Kalshi's maintenance; this catches the rest). Read straight from the order log - a few thousand rows.
         var venueErrors = new List<(string Ticker, string Side, DateTime At)>();
-        foreach (string lf in Directory.GetFiles(dir, (deriv ? "EvDerivLive" : "EvLive") + "_*.csv"))
+        foreach (string lf in Directory.GetFiles(dir, $"Ev{pipe}Live_*.csv"))
             foreach (var r in Csv.Read(lf))
                 if (Csv.Str(r, "Status").StartsWith("error", StringComparison.OrdinalIgnoreCase)
                     && DateTime.TryParse(Csv.Str(r, "At"), CultureInfo.InvariantCulture,
@@ -756,8 +821,7 @@ internal static class Program
                     venueErrors.Add((Csv.Str(r, "Ticker"), Csv.Str(r, "Side"), eat));
 
         Calibration.Report(Calibration.Finalize(raw, settled, venueErrors), settled, dedupe,
-                           deriv ? "EvDerivLive" : "EvLive", shardCash, shardIdx,
-                           deriv ? "EvDerivFollowUp" : "EvFollowUp");
+                           $"Ev{pipe}Live", shardCash, shardIdx, $"Ev{pipe}FollowUp");
         return 0;
     }
 
@@ -1080,9 +1144,10 @@ internal static class Program
     /// and nothing else, whereas dropping it would take it out of the settlement watcher's list before its
     /// result was banked — and Kalshi does not keep obscure markets around to be asked again later.</para>
     /// </summary>
-    private static async Task PairReloadLoopAsync(string path, string? derivPath, EvEvaluator eval,
-                                                  EvEvaluator? evalD, KalshiBookFeed feed,
+    private static async Task PairReloadLoopAsync(string path, string? derivPath, EvConfig cfg, EvEvaluator eval,
+                                                  EvEvaluator? evalD, EvEvaluator? evalS, KalshiBookFeed feed,
                                                   PinnacleOracle oracle, List<EvPair> livePairs,
+                                                  List<EvPair> mlList, List<EvPair> dvList, List<EvPair> shList,
                                                   HashSet<string> everSeen, object pairsLock,
                                                   CancellationToken ct)
     {
@@ -1148,15 +1213,25 @@ internal static class Program
                 // REPLACE, don't accumulate. See ReplacePairs / SetTokens: the live watchlist is whatever the
                 // pairing job currently says, and yesterday's finished fixtures must leave it or a fortnight's
                 // daily re-pairs compound into thousands of dead markets swept every three seconds.
-                // Each evaluator is handed ONLY its own half. Passing the union to both would have the
-                // moneyline pipeline silently adopt every derivative on the next reload, undoing the
-                // split an hour into the run rather than at startup where it would be noticed.
-                var (newPairs, dropped) = eval.ReplacePairs(fresh.Where(p => !p.IsDerivative).ToList());
-                if (evalD is not null) evalD.ReplacePairs(fresh.Where(p => p.IsDerivative).ToList());
-                var newTickers = fresh.Select(p => p.KalshiTicker)
-                                      .Where(t => !everSeen.Contains(t)).Distinct(StringComparer.Ordinal).ToList();
+                // Each evaluator is handed ONLY its own share. Passing the union would have the moneyline
+                // pipeline silently adopt every derivative — or, since 2026-10-08, every football market —
+                // on the next reload, undoing the split an hour into the run rather than at startup where it
+                // would be noticed. EvSports.SplitPipelines is the same function startup used.
+                //
+                // ROUTE FIRST, THEN SUBSCRIBE ONLY WHAT WAS ROUTED. A shadow-sport pair with the shadow
+                // pipeline off is dropped right here: never handed to the moneyline evaluator, and never
+                // subscribed, so it costs no Kalshi subscription and no Pinnacle league socket.
+                var (ml, sh, dv) = EvSports.SplitPipelines(fresh, cfg);
+                if (evalS is null) sh.Clear();
+                if (evalD is null) dv.Clear();
+                var (newPairs, dropped) = eval.ReplacePairs(ml);
+                evalD?.ReplacePairs(dv);
+                var (newShadow, droppedShadow) = evalS?.ReplacePairs(sh) ?? (0, 0);
+                var routed = ml.Concat(dv).Concat(sh).ToList();
+                var newTickers = routed.Select(p => p.KalshiTicker)
+                                       .Where(t => !everSeen.Contains(t)).Distinct(StringComparer.Ordinal).ToList();
                 feed.EnqueueSubscribe(newTickers);
-                var (newTokens, goneTokens) = oracle.SetTokens(fresh.SelectMany(p => p.Legs));
+                var (newTokens, goneTokens) = oracle.SetTokens(routed.SelectMany(p => p.Legs));
 
                 // One lock per resource, each taken consistently everywhere it is touched: `pairsLock`
                 // guards everSeen (shared with the settlement watcher), the list instance guards itself
@@ -1169,24 +1244,39 @@ internal static class Program
                 }
                 lock (livePairs)
                 {
-                    // The snapshot loop holds this instance, so replace the CONTENTS rather than the list.
                     var byTicker = livePairs.ToDictionary(p => p.KalshiTicker, StringComparer.Ordinal);
-                    foreach (var p in fresh) byTicker[p.KalshiTicker] = p;
+                    foreach (var p in routed) byTicker[p.KalshiTicker] = p;
                     livePairs.Clear();
                     livePairs.AddRange(byTicker.Values);
                 }
+                // THE SNAPSHOT LOOPS HOLD THESE THREE INSTANCES, so their CONTENTS are replaced, never the
+                // lists. Until 2026-10-08 the moneyline loop held a copy taken at startup that nothing ever
+                // refreshed, so every fixture added by a reload went unsnapshotted until the next restart
+                // (whole days of EvOracleSnap with zero rows while telemetry logged 50-130k).
+                ReplaceContents(mlList, ml);
+                ReplaceContents(dvList, dv);
+                ReplaceContents(shList, sh);
 
-                if (newPairs > 0 || newTokens > 0 || dropped > 0 || goneTokens > 0)
+                if (newPairs > 0 || newTokens > 0 || dropped > 0 || goneTokens > 0 || newShadow > 0 || droppedShadow > 0)
                     Console.WriteLine($"[PAIRS] reloaded: +{newPairs}/-{dropped} market(s), "
                                     + $"+{newTokens}/-{goneTokens} Pinnacle selection(s) — now "
                                     + $"{eval.PairCount} moneyline"
                                     + (evalD is not null ? $" + {evalD.PairCount} derivative" : "")
+                                    + (evalS is not null ? $" + {evalS.PairCount} shadow (+{newShadow}/-{droppedShadow})" : "")
                                     + $" watched, {seenCount} ever seen (dropped markets "
                                     + "still have their settlements banked).");
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { Console.WriteLine($"[PAIRS] reload error: {ex.GetType().Name}: {ex.Message}"); }
         }
+    }
+
+    /// <summary>Swaps a shared list's contents under its own lock — the lock SnapshotOnce takes on the same
+    /// instance — so a snapshot pass sees the old set or the new one, never half of each.</summary>
+    internal static void ReplaceContents(List<EvPair> list, IEnumerable<EvPair> fresh)
+    {
+        var copy = fresh.ToList();
+        lock (list) { list.Clear(); list.AddRange(copy); }
     }
 
     private static DateTime SafeWriteTime(string path)
@@ -1509,14 +1599,23 @@ internal static class Program
     /// balance is not read at all — that is what keeps M0 and M1 telemetry on one basis across the
     /// boundary.</para>
     /// </summary>
-    /// <param name="mirror">The derivative evaluator, kept on the SAME numbers. Mirrored in here rather
-    /// than at the call site because this runs again on every local date rollover: a startup-only copy
-    /// would leave the derivative pipeline holding day one's equity for the rest of an unattended run,
-    /// and its telemetry would record that stale figure without anything looking wrong.</param>
+    /// <param name="mirrors">The derivative and shadow evaluators (either may be null), kept on the SAME
+    /// numbers. Mirrored in here rather than at the call site because this runs again on every local date
+    /// rollover: a startup-only copy would leave a side pipeline holding day one's equity for the rest of an
+    /// unattended run, and its telemetry would record that stale figure without anything looking wrong.</param>
     private static async Task RefreshBankrollAsync(KalshiOrderClient k, EvEvaluator eval, EvConfig cfg,
                                                    bool announce, bool force = false,
-                                                   EvEvaluator? mirror = null)
+                                                   IReadOnlyList<EvEvaluator?>? mirrors = null)
     {
+        void Mirror(bool equity)
+        {
+            foreach (var m in mirrors ?? Array.Empty<EvEvaluator?>())
+            {
+                if (m is null) continue;
+                if (equity) m.LiveEquityUsd = eval.LiveEquityUsd;
+                m.BankrollUsd = eval.BankrollUsd;
+            }
+        }
         // TWO DIFFERENT NUMBERS, AND MIXING THEM WAS THE BUG.
         //   BankrollUsd   - the telemetry basis for Kelly's Contracts column. Frozen at EV_BANKROLL_USD so
         //                   the dataset stays comparable with every row collected since 2026-08-22.
@@ -1527,7 +1626,7 @@ internal static class Program
         if (cfg.BankrollFallback > 0)
         {
             eval.BankrollUsd = cfg.BankrollFallback;
-            if (mirror is not null) mirror.BankrollUsd = eval.BankrollUsd;
+            Mirror(equity: false);
             if (announce)
                 Console.WriteLine($"[BANKROLL] telemetry basis ${eval.BankrollUsd:0.00} PINNED "
                                 + "(EV_BANKROLL_USD) - Kelly sizing in the CSV stays comparable across the "
@@ -1541,8 +1640,7 @@ internal static class Program
             eval.LiveEquityUsd = cash;
             // Only when nothing pinned it: unpinned, the telemetry basis follows the real account.
             if (cfg.BankrollFallback <= 0) eval.BankrollUsd = eval.LiveEquityUsd;
-            if (mirror is not null)
-            { mirror.LiveEquityUsd = eval.LiveEquityUsd; mirror.BankrollUsd = eval.BankrollUsd; }
+            Mirror(equity: true);
             _bankrollDay = DateTime.Now.Date;
             if (announce || firstOfDay)
                 Console.WriteLine($"[EQUITY  ] ${eval.LiveEquityUsd:0.00} spendable cash on shard "
@@ -1573,12 +1671,12 @@ internal static class Program
     /// <see cref="RefreshBankrollAsync"/> makes every other tick a no-op, so this costs one balance read
     /// per day rather than one per minute.</summary>
     private static async Task BankrollLoopAsync(KalshiOrderClient k, EvEvaluator eval, EvConfig cfg,
-                                                CancellationToken ct, EvEvaluator? mirror = null)
+                                                CancellationToken ct, IReadOnlyList<EvEvaluator?>? mirrors = null)
     {
         while (!ct.IsCancellationRequested)
         {
             try { await Task.Delay(TimeSpan.FromMinutes(5), ct); } catch (OperationCanceledException) { break; }
-            await RefreshBankrollAsync(k, eval, cfg, announce: false, mirror: mirror);
+            await RefreshBankrollAsync(k, eval, cfg, announce: false, mirrors: mirrors);
         }
     }
 

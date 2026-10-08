@@ -68,8 +68,8 @@ public sealed class EvTelemetry : IDisposable
     /// <summary>`prefix` names the file. The derivative pipeline passes "EvDerivTelemetry" so its rows
     /// never land in the moneyline's CSV — which also means the default `--resolve` glob
     /// ("EvTelemetry_*.csv") cannot pick them up by accident, and the separation needs no filter.</summary>
-    public EvTelemetry(string? directory = null, string prefix = "EvTelemetry")
-        => _csv = new RollingCsv(directory ?? Directory.GetCurrentDirectory(), prefix, Columns);
+    public EvTelemetry(string? directory = null, string prefix = "EvTelemetry", bool lazy = false)
+        => _csv = new RollingCsv(directory ?? Directory.GetCurrentDirectory(), prefix, Columns, lazy);
 
     private static string N(double v, int dp = 6) => RollingCsv.N(v, dp);
     private static string N(decimal v, int dp = 6) => RollingCsv.N(v, dp);
