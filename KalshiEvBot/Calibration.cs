@@ -334,8 +334,8 @@ public static class Calibration
     /// </summary>
     /// <summary>
     /// Section 10 — the ROLLING RADAR. Four numbers on the last N fills (default 200; first entries, one per
-    /// ticker+side), each coloured, and one verdict. Built for a check every two days by someone deliberately
-    /// not watching the P&amp;L.
+    /// ticker+side) plus the lifetime SETTLEMENT test, each coloured, and one verdict. Built for a check every
+    /// two days by someone deliberately not watching the P&amp;L.
     ///
     /// <para><b>Why a rolling window and not the whole history.</b> Every other section pools since
     /// 2026-08-22. A strategy that stops working shows up in a pooled number only after the new regime has
@@ -359,6 +359,9 @@ public static class Calibration
     /// if a guard change starts selecting more of its noise. Since 2026-10-05 only readings the signal path
     /// would have accepted count (all legs open and fresh); older readings included the frozen pre-match line
     /// the sidecar's re-seed wrote over in-play prices, and are named but never averaged.</para>
+    /// <para>SETTLEMENT — section 6's fillable test, lifetime, after the measured walk (added 2026-10-08): the
+    /// only line that waits for results. Red only when the always-valid bound proves the edge below
+    /// break-even; until then it reports how far the verdict is.</para>
     ///
     /// <para><b>Colours are the verdict.</b> Green on all three: ignore the P&amp;L, let it run. Any yellow:
     /// look at that line's pooled section. Any red: stop and find out why before the next block. The tags
@@ -573,6 +576,34 @@ public static class Calibration
             grades.Add(1);
             Line(1, $"ORACLE DRIFT  only {dWin.N} of the window's signals have a clean T+300 oracle reading"
                    + (refusedW > 0 ? $" ({refusedW} refused: Pinnacle suspended, stale or gone)" : "") + " - too few to read");
+        }
+
+        // ── 5. SETTLEMENT: section 6's fillable test, LIFETIME - the slow, definitive one ─────────
+        // Not a rolling number: settlement needs every result there is. It is on the radar because it was the
+        // one tripwire that lived only in section 6 (added 2026-10-08). The edge is per contract on fillable
+        // signals AFTER the measured walk - the price the bot actually pays. Green while that is >= 0; yellow
+        // when it is below break-even; red only when the always-valid UPPER bound is below zero, i.e. proven
+        // to lose by a test that stays valid however often this report is read.
+        var fv = _fillableVerdict;
+        if (fv is null)
+        {
+            grades.Add(1);
+            Line(1, "SETTLEMENT    no fillable settlement test yet (section 6 had too few single-sided markets)");
+        }
+        else
+        {
+            double e = fv.Edge, lo = e - fv.Radius, hi = e + fv.Radius;
+            int gS = hi < 0 ? 2 : e < 0 ? 1 : 0;
+            grades.Add(gS);
+            string state = lo > 0 ? "PROVEN POSITIVE - the always-valid lower bound is above zero"
+                         : hi < 0 ? "PROVEN BELOW BREAK-EVEN"
+                         : fv.Target > 0 ? $"verdict at n ~= {fv.Target} if this edge holds ({100.0 * fv.N / fv.Target:0}% there)"
+                         : "no verdict in sight at this edge";
+            // "lifetime" lives in the body, not the legend: Discord strips the legend and heads the block
+            // "last 200 fills", and this is the one line that is not.
+            Line(gS, $"SETTLEMENT    lifetime fillable signals {100 * e:+0.00;-0.00}c/ctr {(fv.Walked ? "after the walk" : "at the ask (no walk measured)")} "
+                   + $"+/-{100 * fv.Se:0.00} (t={(fv.Se > 0 ? e / fv.Se : 0):+0.0;-0.0}, n={fv.N})   "
+                   + $"always-valid {100 * lo:+0.0;-0.0}c to {100 * hi:+0.0;-0.0}c, {state}   (red = proven below break-even)");
         }
 
         // ── verdict ─────────────────────────────────────────────────────────────────────────────
@@ -1904,6 +1935,13 @@ public static class Calibration
     /// - present whether or not we trade - and how much is specific to the bets that got filled.</summary>
     private static readonly Dictionary<int, double> _decileDiff = new();
 
+    /// <summary>Section 6's FILLABLE settlement test, kept for the radar's SETTLEMENT line: single-sided markets,
+    /// edge per contract after the measured walk (at the screened ask when no walk is measured yet - Walked says
+    /// which), its SE, the always-valid radius at the current n, and the n where that bound clears zero at this
+    /// edge (0 = not within 200k). Null when section 6 had too little to say.</summary>
+    private sealed record FillableVerdict(int N, double Edge, bool Walked, double Se, double Radius, long Target);
+    private static FillableVerdict? _fillableVerdict;
+
     public static Walk MeasuredWalk(string dir, string livePrefix)
     {
         if (_walk is { } cached) return cached;
@@ -2562,10 +2600,12 @@ public static class Calibration
             // order pays more (MeasuredWalk). Applied only to the FILLABLE block, because that is the set
             // the live path actually buys - on the all-signals block the number would be a haircut on
             // trades that were never placeable anyway.
+            double edgeWalk = double.NaN;
             if (fillableOnly && MeasuredWalk(Directory.GetCurrentDirectory(), livePrefix) is { } wk
                 && !double.IsNaN(wk.PerContract) && wk.Contracts > 0)
             {
                 double edgeW = edge + wk.PerContract;
+                edgeWalk = edgeW;
                 double nW = edgeW > 0 ? 4 * var0 / (edgeW * edgeW) : double.NaN;
                 Console.WriteLine($"   B2. AFTER THE MEASURED WALK  (live orders paid {100 * wk.PerContract:+0.00;-0.00}c/contract over the screened ask, n={wk.Contracts:0})");
                 Console.WriteLine($"      now          {edgeW:+0.0000;-0.0000} per contract"
@@ -2614,6 +2654,18 @@ public static class Calibration
             Console.WriteLine(cross > 0
                 ? $"      crosses zero at n ~= {cross}  IF the current edge ({edge:+0.0000;-0.0000}) is the true one"
                 : "      does not cross within 200k at the current edge estimate");
+            // THE SAME CROSSING AFTER THE WALK (fillable block only): the edge the bot actually pays. This is
+            // the target the radar's SETTLEMENT line counts toward (2026-10-08), printed here so the two agree.
+            long crossW = 0;
+            if (fillableOnly && double.IsFinite(edgeWalk))
+            {
+                if (edgeWalk > 0)
+                    for (long m = n; m <= 200000; m = m < 2000 ? m + 10 : m + 250)
+                        if (edgeWalk - Radius(m, rhoTune) > 0) { crossW = m; break; }
+                Console.WriteLine(crossW > 0
+                    ? $"      after the walk ({edgeWalk:+0.0000;-0.0000}) it crosses at n ~= {crossW}  <- the radar's SETTLEMENT line counts toward this"
+                    : $"      after the walk ({edgeWalk:+0.0000;-0.0000}) it does not cross within 200k");
+            }
             Console.WriteLine("      Wider than the fixed-n interval by design: that width is what buys the right");
             Console.WriteLine("      to look every day. Watch THIS one week to week, not A or B.");
 
@@ -2628,6 +2680,15 @@ public static class Calibration
             Console.WriteLine($"      {sg.Count} signal row(s) span {byMkt.Count} market(s); {twoSidedMkts} signalled on BOTH");
             Console.WriteLine( "      sides and are EXCLUDED above — a both-sides market is forced to exactly one win,");
             Console.WriteLine( "      so it is deterministic and says nothing about edge.");
+
+            // FOR THE RADAR (2026-10-08): the fillable test is the one tripwire that otherwise lives only down
+            // here. Progress is measured against the AFTER-WALK verdict - the price the bot actually pays -
+            // falling back to the at-ask edge only when no live walk has been measured yet.
+            if (fillableOnly)
+            {
+                bool walked = double.IsFinite(edgeWalk);
+                _fillableVerdict = new FillableVerdict(n, walked ? edgeWalk : edge, walked, se, rad, walked ? crossW : cross);
+            }
         }
 
         // ── 5. Signals — colour only ──────────────────────────────────────────────────────────────────
