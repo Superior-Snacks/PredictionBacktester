@@ -74,6 +74,36 @@ def _canon(key: str) -> str:
     return _TEAM_ALIASES.get(key, key)
 
 
+# NFL: Kalshi titles a game "CHI Bears vs GB Packers" - a city CODE plus the nickname - and neither "chi bears"
+# nor "gb packers" is contained in Pinnacle's "Chicago Bears" / "Green Bay Packers", so the containment-only
+# scheduled run paired 0 of 54 NFL markets (2026-10-09). The code is expanded to its city, making the key the
+# full team name. NOT nickname-only: Pinnacle's "Football" sport lists college games too, and "panthers" +
+# "eagles" is just as contained in "Pittsburgh Panthers vs Boston College Eagles" (a real ACC fixture, a day
+# before the NFL slate) - the full name is unique where the nickname is not. Codes are the ones Kalshi's titles
+# actually use (incl. its quirks JAC and NOLA; LA/NY cover both teams, the nickname separates them) plus the
+# usual alternates. An unknown code leaves the key unchanged, which fails to pair rather than pairing wrong.
+_NFL_CITY = {
+    "ari": "arizona", "atl": "atlanta", "bal": "baltimore", "buf": "buffalo", "car": "carolina",
+    "chi": "chicago", "cin": "cincinnati", "cle": "cleveland", "dal": "dallas", "den": "denver",
+    "det": "detroit", "gb": "green bay", "hou": "houston", "ind": "indianapolis", "jac": "jacksonville",
+    "jax": "jacksonville", "kc": "kansas city", "la": "los angeles", "lar": "los angeles",
+    "lac": "los angeles", "lv": "las vegas", "mia": "miami", "min": "minnesota", "ne": "new england",
+    "no": "new orleans", "nola": "new orleans", "ny": "new york", "nyg": "new york", "nyj": "new york",
+    "phi": "philadelphia", "pit": "pittsburgh", "sea": "seattle", "sf": "san francisco", "tb": "tampa bay",
+    "ten": "tennessee", "was": "washington", "wsh": "washington",
+}
+
+
+def _canon_team(key: str, ticker: str) -> str:
+    """_canon, plus the KXNFLGAME-only "<code> <nickname>" -> "<city> <nickname>" expansion above."""
+    if (ticker or "").split("-")[0].upper() == "KXNFLGAME":
+        code, _, nick = key.partition(" ")
+        city = _NFL_CITY.get(code)
+        if city and nick:
+            return f"{city} {nick}"
+    return _canon(key)
+
+
 # ── league URL (for the browser-WS tab manager: open one tab per gap league) ────
 def _slugify(s: str) -> str:
     """Pinnacle URL slug from a display name: strip accents (their name field is already ASCII-folded, e.g.
@@ -342,7 +372,7 @@ def main() -> None:
             unmatched.append(f"{tk} (couldn't parse Kalshi outcome)")
             continue
         yes_outcome, teams, is_tie = key
-        teams = frozenset(_canon(t) for t in teams)   # fold Kalshi team abbreviations (A's → athletics)
+        teams = frozenset(_canon_team(t, tk) for t in teams)   # fold Kalshi team abbreviations (A's → athletics; NFL codes → city)
         yes_outcome = _canon(yes_outcome)
         expected = set() if args.no_league_anchor else _expected_sports(tk)   # league anchor by series
 
