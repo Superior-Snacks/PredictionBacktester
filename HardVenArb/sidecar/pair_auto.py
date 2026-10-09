@@ -186,7 +186,10 @@ SERIES_SPORT = {
     "KXBSLGAME": {"BASKETBALL"}, "KXLNBELITEGAME": {"BASKETBALL"}, "KXNZNBLGAME": {"BASKETBALL"},
     "KXPLKGAME": {"BASKETBALL"}, "KXSPBGAME": {"BASKETBALL"}, "KXVBAGAME": {"BASKETBALL"},
     "KXBSNGAME": {"BASKETBALL"}, "KXBIG3GAME": {"BASKETBALL"}, "KXISLGAME": {"BASKETBALL"},
-    "KXNCAABBGAME": {"BASKETBALL"},
+    # KXNCAABBGAME is College BASEBALL (Kalshi /series title "College Baseball Game", checked 2026-10-09),
+    # not basketball - it was anchored to the wrong sport. College basketball is KXNCAABGAME / KXNCAAMBGAME /
+    # KXNCAAWBGAME; which of those carries games is only visible once the season lists them (November).
+    "KXNCAABBGAME": {"BASEBALL"},
     "KXWCGAME": {"FIFA WORLD CUP", "SOCCER"}, "KXUSLGAME": {"SOCCER"}, "KXUSLCUPGAME": {"SOCCER"},
     "KXLALIGA2GAME": {"SOCCER"}, "KXCHLLDPGAME": {"SOCCER"}, "KXBOLPDIVGAME": {"SOCCER"},
     # The major soccer leagues. Previously absent — including the top divisions while KXLALIGA2GAME (the
