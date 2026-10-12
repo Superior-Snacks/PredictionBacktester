@@ -32,7 +32,7 @@ forgets what today already burned. Keep `--budget-hours` at or below PINNACLE_MA
 never becomes the binding constraint, which is what makes that gap harmless.
 """
 from __future__ import annotations
-import argparse, datetime as dt, os, sys
+import argparse, datetime as dt, json, os, sys
 from typing import NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -54,13 +54,15 @@ def hm(s: str) -> int:
 
 
 # -- slate ------------------------------------------------------------------------------------------------
-def load_starts(sport_ids, horizon_h, pairs_path, paired_only):
+def load_starts(sport_ids, horizon_h, pairs_path, paired_only, back_hours=0):
     """Today's game starts, optionally restricted to games we can actually bet.
 
-    back_hours=0 on purpose: a match that has already started cannot be covered by a window we are about to
-    author, so counting it would inflate every candidate equally while changing no decision.
+    back_hours=0 for the STARTS objective: a match that has already started cannot be covered by a window we
+    are about to author, so counting it would inflate every candidate equally while changing no decision.
+    The IN-PLAY objective passes a few hours: a match LISTED at 10:00 is often still to be played at noon
+    ("followed by"), and the board keeps listing it until it goes live.
     """
-    starts = sched.fetch_starts(sport_ids, horizon_hours=horizon_h, back_hours=0)
+    starts = sched.fetch_starts(sport_ids, horizon_hours=horizon_h, back_hours=back_hours)
     starts = sched.filter_to_local_day(starts)
     if paired_only:
         mids = sched.paired_mids(pairs_path)
@@ -69,20 +71,67 @@ def load_starts(sport_ids, horizon_h, pairs_path, paired_only):
     return starts
 
 
+# -- the in-play objective (2026-10-12) ---------------------------------------------------------------------
+# PINNACLE_BLOCK_OBJECTIVE=inplay scores a window by the tennis it will see LIVE rather than by the listed starts
+# it contains. The EV bot trades in-play only and its signal rate per watched hour is flat across a match (63%
+# of fills come 1h+ after the listed start), while listed starts are nominal - the median match ENDS 150 min
+# after its listed start. A window that "covers" a 10:00 start and closes at 11:15 has mostly missed it.
+# live_curve.json (built by live_curve.py from Kalshi's real match ends) gives P(live) per minute after the
+# listed start; a window's score is the expected live minutes it holds, summed over matches.
+CURVE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "live_curve.json")
+
+
+def load_curve(path=None):
+    """(step_min, [P(live)...]) from live_curve.json, or None - the caller then falls back to starts."""
+    try:
+        with open(path or CURVE_PATH, encoding="utf-8") as fh:
+            j = json.load(fh)
+        step, curve = int(j["step_min"]), [float(x) for x in j["curve"]]
+        return (step, curve) if step > 0 and curve else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _cum_live(curve):
+    """C[m] = expected live minutes in the first m minutes after a listed start (1-minute resolution)."""
+    step, p = curve
+    out = [0.0]
+    for m in range(len(p) * step):
+        out.append(out[-1] + p[m // step])
+    return out
+
+
+def expected_live(times, blocks, curve, jitter_min=0):
+    """Expected live minutes `blocks` hold for matches LISTED at `times` (minutes from local midnight)."""
+    c = _cum_live(curve)
+    top = len(c) - 1
+    cm = lambda x: c[0 if x <= 0 else min(x, top)]
+    return sum(cm(b.close_min - jitter_min - t) - cm(b.open_min + jitter_min - t) for t in times for b in blocks)
+
+
 # -- the optimiser ------------------------------------------------------------------------------------------
 def optimise(starts, budget_min, min_gap_min, jitter_min, earliest_min, latest_min, now_min,
-             min_len=60, max_len=300):
-    """Pick non-overlapping windows maximising covered starts, subject to a total-minutes budget.
+             min_len=60, max_len=300, objective="starts", curve=None):
+    """Pick non-overlapping windows maximising coverage, subject to a total-minutes budget.
+
+    Coverage is covered STARTS by default, or expected LIVE minutes with objective="inplay" and a curve (see
+    above; without a curve it silently stays on starts). Everything else - the grid, gaps, jitter, lengths,
+    budget and the DP - is shared, so the two objectives differ in what they count and nothing else.
 
     Weighted interval scheduling with a budget - a DP over candidates sorted by close time, NOT a search over
     combinations: at ~288 candidates the exhaustive form is C(288,4) ~ 283M and does not finish.
 
     Coverage is scored under WORST-CASE jitter (open slips `jitter_min` late, close slips `jitter_min` early)
     so a block is only credited with matches it would still catch on the unluckiest day. Because the chosen
-    windows are non-overlapping and separated by `min_gap_min`, no start can fall inside two of them, so
-    coverage is additive and the DP is exact rather than a heuristic.
+    windows are non-overlapping and separated by `min_gap_min`, no start - and no live minute - can fall inside
+    two of them, so coverage is additive and the DP is exact rather than a heuristic.
     """
     times = sorted(t.hour * 60 + t.minute for t in (g[0] for g in starts))
+    inplay = objective == "inplay" and curve is not None
+    if inplay:
+        cum = _cum_live(curve)
+        top = len(cum) - 1
+        cm = lambda x: cum[0 if x <= 0 else min(x, top)]
     # ALIGN THE SCAN TO THE QUARTER-HOUR GRID FIRST. `earliest_min` is usually `now`, an arbitrary minute,
     # and range(908, ..., 15) only ever visits minutes congruent to 908 mod 15 - so the `o % 60 in (15, 45)`
     # test below could never fire and the optimiser silently returned "nothing worth opening" at any wall
@@ -99,7 +148,12 @@ def optimise(starts, budget_min, min_gap_min, jitter_min, earliest_min, latest_m
             if c > latest_min:
                 break
             lo, hi = o + jitter_min, c - jitter_min
-            n = sum(1 for t in times if lo <= t < hi)
+            if inplay:
+                n = sum(cm(hi - t) - cm(lo - t) for t in times)
+                if n < 0.5:                                # under half an expected live minute: not a candidate
+                    continue
+            else:
+                n = sum(1 for t in times if lo <= t < hi)
             if n:
                 cands.append((c, o, length, n))
     if not cands:
@@ -192,12 +246,18 @@ def main() -> int:
     ap.add_argument("--set-min-games", type=int, default=None,
                     help="also push min_games; a large value suppresses the density planner entirely so the "
                          "authored blocks ARE the plan (see README note)")
+    ap.add_argument("--objective", default=os.environ.get("PINNACLE_BLOCK_OBJECTIVE", "starts"),
+                    choices=("starts", "inplay"), help="what a window is scored by (default: env or 'starts')")
+    ap.add_argument("--curve", default="", help="live_curve.json for --objective inplay (default: beside this file)")
     a = ap.parse_args()
+    curve = load_curve(a.curve or None) if a.objective == "inplay" else None
+    if a.objective == "inplay" and curve is None:
+        print("[BLOCKS] --objective inplay but no usable live_curve.json - scoring by STARTS. Run live_curve.py.")
 
     pairs_path = a.pairs or str(sched.Path(__file__).resolve().parent.parent / "cross_pairs.json")
     import sports as sports_cfg
     ids = [int(x) for x in a.sports.split(",") if x.strip()] or sports_cfg.pinnacle_ids()
-    starts = load_starts(ids, a.horizon, pairs_path, not a.all_games)
+    starts = load_starts(ids, a.horizon, pairs_path, not a.all_games, back_hours=6 if curve else 0)
     now = dt.datetime.now()
     now_min = now.hour * 60 + now.minute
     print("[BLOCKS] %d %sstart(s) today; planning forward from %s"
@@ -237,7 +297,8 @@ def main() -> int:
     # Plan against the jitter the lifecycle will ACTUALLY apply, or coverage is scored against a schedule
     # that will not happen.
     plan_jitter = a.jitter if a.jitter is not None else int(float(os.environ.get("PINNACLE_JITTER_MIN", "7")))
-    blocks = optimise(starts, budget, a.min_gap, plan_jitter, earliest, hm(a.latest), now_min)
+    blocks = optimise(starts, budget, a.min_gap, plan_jitter, earliest, hm(a.latest), now_min,
+                      objective="inplay" if curve else "starts", curve=curve)
     allb = sorted(frozen + blocks)
     if not allb:
         print("[BLOCKS] nothing worth opening - leaving the schedule untouched.")
@@ -251,6 +312,10 @@ def main() -> int:
     print("[BLOCKS] %s" % pins)
     print("[BLOCKS] %d block(s), %.2fh, covering %d/%d start(s) (%.0f%%)"
           % (len(allb), total / 60.0, cov, len(times), 100.0 * cov / max(len(times), 1)))
+    if curve:
+        got, full = expected_live(times, allb, curve, plan_jitter), expected_live(times, [Block(0, 2880)], curve)
+        print("[BLOCKS] in-play objective: %.1f of %.1f expected live match-hours covered (%.0f%%)"
+              % (got / 60, full / 60, 100.0 * got / max(full, 1e-9)))
     if a.push:
         push(a.push, pins, a.jitter, a.set_min_games)
     return 0

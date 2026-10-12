@@ -984,11 +984,15 @@ class PinnacleAdapter(BookAdapter):
                 min_gap=int(max(self._lifecycle_min_downtime + 5, 50)),
                 jitter=int(self._lifecycle_jitter),
                 earliest=self._autoblock_earliest, latest=self._autoblock_latest,
-                horizon_h=self._lifecycle_horizon)
+                horizon_h=self._lifecycle_horizon,
+                # "starts" (default, the original) | "inplay": score windows by expected LIVE minutes from
+                # sidecar/live_curve.json instead of listed starts - see build_blocks / live_curve.py.
+                objective=os.environ.get("PINNACLE_BLOCK_OBJECTIVE", "starts"))
             self._blocks_task = asyncio.create_task(self._blocks.run())
             print(f"[PINNACLE] AUTO-BLOCK on — authoring work windows at startup then daily at "
                   f"{self._autoblock_hours} local, budget {self._autoblock_budget_h:g}h, "
-                  f"window {self._autoblock_earliest}-{self._autoblock_latest}. "
+                  f"window {self._autoblock_earliest}-{self._autoblock_latest}, "
+                  f"objective {self._blocks.status()['objective']}. "
                   f"Static PINNACLE_PIN_HOURS is only the cold-start fallback now.")
             cadence = (f"every {self._pair_interval_min} min (intraday — pairs live/late-appearing games)"
                        if self._pair_interval_min > 0 else f"daily {self._pair_hour:02d}:00 local")

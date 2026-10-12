@@ -52,8 +52,13 @@ class BlockScheduler:
     def __init__(self, lifecycle, sport_ids, pairs_path: str,
                  hours: str = "06,12", budget_h: float = 10.0, min_gap: int = 50,
                  jitter: int = 7, earliest: str = "06:00", latest: str = "23:00",
-                 horizon_h: int = 30, initial_delay: float = 20.0, paired_only: bool = True):
+                 horizon_h: int = 30, initial_delay: float = 20.0, paired_only: bool = True,
+                 objective: str = "starts", curve_path: str | None = None):
         self._lc = lifecycle
+        # "starts" (the original) or "inplay" (expected live minutes - see build_blocks). The curve is re-read
+        # on every pass, so rebuilding live_curve.json takes effect at the next re-author without a restart.
+        self._objective = "inplay" if (objective or "").strip().lower() == "inplay" else "starts"
+        self._curve_path = curve_path
         self._sport_ids = list(sport_ids)
         self._pairs = pairs_path
         self._hours = _hours_from_env(hours) or [6, 12]
@@ -72,7 +77,12 @@ class BlockScheduler:
     # -- one pass ------------------------------------------------------------------------------------
     def _author(self, why: str) -> str | None:
         """Compute the block spec for the REST of today. Returns None when there is nothing worth opening."""
-        starts = bb.load_starts(self._sport_ids, self._horizon, self._pairs, self._paired_only)
+        curve = bb.load_curve(self._curve_path) if self._objective == "inplay" else None
+        if self._objective == "inplay" and curve is None:
+            print(f"[BLOCKS] {why}: PINNACLE_BLOCK_OBJECTIVE=inplay but no usable live_curve.json - "
+                  "scoring by STARTS this pass. Run sidecar/live_curve.py.")
+        starts = bb.load_starts(self._sport_ids, self._horizon, self._pairs, self._paired_only,
+                                back_hours=6 if curve else 0)
         if not starts:
             print(f"[BLOCKS] {why}: no {'paired ' if self._paired_only else ''}games on today's board - "
                   "leaving the current pins alone.")
@@ -97,7 +107,8 @@ class BlockScheduler:
         spent = sum(b.close_min - b.open_min for b in frozen)
         budget = max(int(self._budget_h * 60) - spent, 0)
         blocks = bb.optimise(starts, budget, self._min_gap, self._jitter,
-                             earliest, bb.hm(self._latest), now_min)
+                             earliest, bb.hm(self._latest), now_min,
+                             objective="inplay" if curve else "starts", curve=curve)
         allb = sorted(frozen + blocks)
         if not allb:
             print(f"[BLOCKS] {why}: nothing worth opening for the rest of today - pins unchanged.")
@@ -110,6 +121,11 @@ class BlockScheduler:
         print(f"[BLOCKS] {why}: {spec}")
         print(f"[BLOCKS] {why}: {len(allb)} block(s) ({len(frozen)} frozen), {total/60:.2f}h, "
               f"covering {cov}/{len(times)} start(s) ({100*cov/max(len(times),1):.0f}%)")
+        if curve:
+            got = bb.expected_live(times, allb, curve, self._jitter)
+            full = bb.expected_live(times, [bb.Block(0, 2880)], curve)
+            print(f"[BLOCKS] {why}: in-play objective - {got/60:.1f} of {full/60:.1f} expected live "
+                  f"match-hours covered ({100*got/max(full, 1e-9):.0f}%)")
         return spec
 
     async def _run_once(self, why: str) -> None:
@@ -152,5 +168,6 @@ class BlockScheduler:
 
     def status(self) -> dict:
         return {"hours": self._hours, "budget_h": self._budget_h, "jitter": self._jitter,
+                "objective": self._objective,
                 "last_spec": self.last_spec, "last_error": self.last_error,
                 "last_run": self.last_run.isoformat() if self.last_run else None}
