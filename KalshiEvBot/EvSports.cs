@@ -20,6 +20,11 @@ public static class EvSports
         ["KXNBAGAME"] = "basketball", ["KXNCAABGAME"] = "basketball", ["KXWNBAGAME"] = "basketball",
         ["KXEUROLEAGUEGAME"] = "basketball",
         ["KXNHLGAME"] = "hockey",
+        // The European leagues and minor ones (2026-10-16). Without these they end in "GAME" and read soccer -
+        // still shadow-routed (not tennis), but filed under the retired sport in every report.
+        ["KXKHLGAME"] = "hockey", ["KXSHLGAME"] = "hockey", ["KXLIIGAGAME"] = "hockey", ["KXDELGAME"] = "hockey",
+        ["KXAHLGAME"] = "hockey", ["KXNCAAHGAME"] = "hockey", ["KXNCAAHOCKEYGAME"] = "hockey",
+        ["KXEUCHLGAME"] = "hockey", ["KXIIHFGAME"] = "hockey",
     };
 
     /// <summary>Coarse sport from the Kalshi SERIES (the ticker up to its first '-'). Matching on the series

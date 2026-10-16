@@ -140,8 +140,15 @@ CATALOG: dict[str, Sport] = {
         bia_sport="boxing", bia_path="/sportsbook/boxing", enabled=False,
     ),
     "icehockey": Sport(
-        key="icehockey", pinnacle_id=0, duration_min=180,
-        moneyline=("KXNHLGAME",),   # off-season now; ramps October
+        # pinnacle_id 19 = Pinnacle "Hockey" (added 2026-10-16 for KalshiEvBot SHADOW telemetry). Unconfirmed
+        # until the first pairing run, and safe the same way football's 15 was: pairing anchors on the sport
+        # NAME (pair_auto SERIES_SPORT -> "HOCKEY"), so a wrong id yields 0 pairs, never a wrong pair.
+        # Series: NHL + the four European leagues that play inside the bot's 06-23 UTC hours (KHL, SHL, Liiga,
+        # DEL). NOT listed: KXNCAAHGAME (ties settle 50/50 on Kalshi) and KXAHLGAME (no real market, ~90c spreads).
+        # HARDVEN_SERIES_ALLOW picks which actually pair - NHL plays ~23:00-02:30 UTC, so it only earns its
+        # pre-match polling once an evening window is pinned.
+        key="icehockey", pinnacle_id=19, duration_min=180,
+        moneyline=("KXNHLGAME", "KXKHLGAME", "KXSHLGAME", "KXLIIGAGAME", "KXDELGAME"),
         bia_sport="ih", bia_path="/sportsbook/ice-hockey", enabled=False,
     ),
     "darts": Sport(

@@ -698,6 +698,13 @@ public static class SelfTest
                 Check(EvSports.Of("KXEFLCUPGAME-26AUG25WATPET-WAT") == "soccer",
                       "a team code containing ATP no longer makes a soccer game tennis (old whole-ticker bug)");
                 Check(EvSports.Of("KXNHLGAME-26OCT08BOSTOR-BOS") == "hockey", "an NHL market is hockey");
+                Check(EvSports.Of("KXKHLGAME-26OCT181010AKBDIN-DIN") == "hockey"
+                      && EvSports.Of("KXSHLGAME-26OCT171200IFBTIM-TIM") == "hockey"
+                      && EvSports.Of("KXLIIGAGAME-26OCT171000JOKTAM-TAM") == "hockey"
+                      && EvSports.Of("KXDELGAME-26OCT181300REDNUR-RED") == "hockey",
+                      "KHL/SHL/Liiga/DEL markets are hockey, not soccer (they end in GAME)");
+                Check(!new EvConfig().IsLiveSport("KXKHLGAME-26OCT181010AKBDIN-DIN"),
+                      "a hockey market is never live by default - shadow only");
                 Check(EvSports.Of("KXSOMETHINGNEW-X") == "other", "an unknown series reads other, not soccer");
                 Check(Calibration.Sport("KXNFLGAME-26OCT11KCBUF-KC") == "football",
                       "the report's Sport() is the router's function, so the two cannot disagree");

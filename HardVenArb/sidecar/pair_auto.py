@@ -201,6 +201,11 @@ SERIES_SPORT = {
     "KXBUNDESLIGA2GAME": {"SOCCER"}, "KXMLSGAME": {"SOCCER"}, "KXUCLGAME": {"SOCCER"},
     "KXUCLWGAME": {"SOCCER"}, "KXNCAAMSOCCERGAME": {"SOCCER"}, "KXUAEPLGAME": {"SOCCER"},
     "KXNFLGAME": {"FOOTBALL"}, "KXNCAAFGAME": {"FOOTBALL"}, "KXCFLGAME": {"FOOTBALL"},
+    # Hockey (2026-10-16). Both spellings, because Pinnacle's name for its sport id 19 is not yet observed; the
+    # anchor matters here - Djurgarden, Malmo, Frolunda and others are soccer clubs too.
+    "KXNHLGAME": {"HOCKEY", "ICE HOCKEY"}, "KXKHLGAME": {"HOCKEY", "ICE HOCKEY"},
+    "KXSHLGAME": {"HOCKEY", "ICE HOCKEY"}, "KXLIIGAGAME": {"HOCKEY", "ICE HOCKEY"},
+    "KXDELGAME": {"HOCKEY", "ICE HOCKEY"},
     "KXAFLGAME": {"AUSSIE RULES"},
     "KXATPMATCH": {"TENNIS"}, "KXWTAMATCH": {"TENNIS"}, "KXITFMATCH": {"TENNIS"}, "KXITFWMATCH": {"TENNIS"},
     "KXATPCHALLENGERMATCH": {"TENNIS"}, "KXWTACHALLENGERMATCH": {"TENNIS"},

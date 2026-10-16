@@ -94,6 +94,10 @@ _NFL_CITY = {
 }
 
 
+# Kalshi series that are 2-way winner markets (OT/shootout included) and so must never pair a 3-way line.
+_TWO_WAY_ONLY = {"KXNHLGAME", "KXKHLGAME", "KXSHLGAME", "KXLIIGAGAME", "KXDELGAME"}
+
+
 def _canon_team(key: str, ticker: str) -> str:
     """_canon, plus the KXNFLGAME-only "<code> <nickname>" -> "<city> <nickname>" expansion above."""
     if (ticker or "").split("-")[0].upper() == "KXNFLGAME":
@@ -404,6 +408,13 @@ def main() -> None:
         if entry is None:
             unmatched.append(f"{tk}  {sorted(teams)} (no Pinnacle game near {e.get('settlement_date')}"
                              f"/ticker-time among {len(games)} candidate(s))")
+            continue
+        # A KALSHI 2-WAY MARKET MUST NOT PAIR A PINNACLE 3-WAY LINE. Kalshi's hockey markets settle on the WINNER,
+        # overtime and shootout included; a 3-way (home/draw/away) moneyline is regulation time, a different bet
+        # whose draw leg would be de-vigged into a confidently wrong P_true. Refuse rather than guess.
+        if entry["three_way"] and tk.split("-")[0].upper() in _TWO_WAY_ONLY:
+            unmatched.append(f"{tk}  {sorted(teams)} (Pinnacle's line is 3-way/regulation; Kalshi settles "
+                             f"incl. OT - refused)")
             continue
         # 2-way markets are mirrors → fill one per event; 3-way outcomes are DISTINCT → fill all.
         if not entry["three_way"] and not args.both and e.get("event_id") in done_events:
