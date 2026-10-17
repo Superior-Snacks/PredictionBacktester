@@ -94,6 +94,14 @@ public sealed class EvConfig
     /// <see cref="EvSports"/>. Never mutated after construction; the clones still take their own copy.</summary>
     public HashSet<string> LiveSports = EvSports.ParseLive(Environment.GetEnvironmentVariable("EV_LIVE_SPORTS"));
     public bool IsLiveSport(string ticker) => LiveSports.Contains(EvSports.Of(ticker));
+    /// <summary>THE SHADOW SCOPE (2026-10-16): poll - and therefore REST-check - a shadow pair only from
+    /// EV_SHADOW_LEAD_MIN before its listed start until EV_SHADOW_MAX_LIVE_MIN after it. Without it every paired
+    /// shadow game is polled from the moment it is paired, days ahead: thousands of pre-match REST checks and a
+    /// bigger /odds set at tennis's busiest hour, for prices that cannot be traded anyway (in-play only).
+    /// EV_SHADOW_NEAR_ONLY=0 restores polling everything.</summary>
+    public bool   ShadowNearOnly   = Env("EV_SHADOW_NEAR_ONLY", 1) > 0.5;
+    public double ShadowLeadMin    = Env("EV_SHADOW_LEAD_MIN", 30);
+    public double ShadowMaxLiveMin = Env("EV_SHADOW_MAX_LIVE_MIN", 300);
     /// <summary>How far below EvMin a WS-implied EV may sit and still buy a REST call. The WS ask is
     /// optimistic 95% of the time, which makes WS EV an upper bound and pre-screening safe; this slack
     /// covers the other 5%.</summary>

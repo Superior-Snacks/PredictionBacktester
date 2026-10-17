@@ -19,6 +19,21 @@ public static class EvSports
         ["KXNFLGAME"] = "football", ["KXNCAAFGAME"] = "football", ["KXCFLGAME"] = "football",
         ["KXNBAGAME"] = "basketball", ["KXNCAABGAME"] = "basketball", ["KXWNBAGAME"] = "basketball",
         ["KXEUROLEAGUEGAME"] = "basketball",
+        // The rest of the sidecar's basketball series (sports.py, 2026-10-16) - every one ends in "GAME" and would
+        // otherwise be filed under the retired soccer sport in every shadow report.
+        ["KXNCAAMBGAME"] = "basketball", ["KXNCAAWBGAME"] = "basketball", ["KXEUROCUPGAME"] = "basketball",
+        ["KXACBGAME"] = "basketball", ["KXBSLGAME"] = "basketball", ["KXLNBELITEGAME"] = "basketball",
+        ["KXLNBELITE2GAME"] = "basketball", ["KXVTBGAME"] = "basketball", ["KXSLBGAME"] = "basketball",
+        ["KXCZENBLGAME"] = "basketball", ["KXAUTBSLGAME"] = "basketball", ["KXKORISLIIGAGAME"] = "basketball",
+        ["KXGBLGAME"] = "basketball", ["KXBBLGAME"] = "basketball", ["KXBBSERIEAGAME"] = "basketball",
+        ["KXBBSERIEBGAME"] = "basketball", ["KXPLKGAME"] = "basketball", ["KXISLGAME"] = "basketball",
+        ["KXJBLEAGUEGAME"] = "basketball", ["KXCBAGAME"] = "basketball", ["KXKBLGAME"] = "basketball",
+        ["KXNBLGAME"] = "basketball", ["KXNZNBLGAME"] = "basketball", ["KXPBAGAME"] = "basketball",
+        ["KXNBBGAME"] = "basketball", ["KXLBPGAME"] = "basketball", ["KXSPBGAME"] = "basketball",
+        ["KXLNBPGAME"] = "basketball", ["KXBSNGAME"] = "basketball", ["KXCEBLGAME"] = "basketball",
+        ["KXVBAGAME"] = "basketball", ["KXBIG3GAME"] = "basketball",
+        // eBasketball is a video game with a TIE rule; the pairer never takes it. Named so it can't read soccer.
+        ["KXEBASKETBALLGAME"] = "other",
         ["KXNHLGAME"] = "hockey",
         // The European leagues and minor ones (2026-10-16). Without these they end in "GAME" and read soccer -
         // still shadow-routed (not tennis), but filed under the retired sport in every report.
@@ -50,6 +65,21 @@ public static class EvSports
         if (set.Count == 0) set.Add("tennis");
         return set;
     }
+
+    /// <summary>Is a shadow pair inside its scope right now: from `leadMin` before its listed start to `maxLiveMin`
+    /// after it? Team sports start on time (unlike tennis's "followed by"), so the listed start is a sound anchor.
+    /// An UNKNOWN start is always in scope - a missing field may cost polling, never coverage.</summary>
+    public static bool ShadowActive(EvPair p, DateTime nowUtc, double leadMin, double maxLiveMin)
+        => p.StartUtc is not DateTime s
+           || (nowUtc >= s.AddMinutes(-leadMin) && nowUtc <= s.AddMinutes(maxLiveMin));
+
+    /// <summary>The oracle's selection set: every live-sport moneyline and every derivative, plus the shadow
+    /// pairs inside their scope (all of them when near-only is off). Startup, every pair reload and the periodic
+    /// scope pass all use this, so they can never disagree about what is polled.</summary>
+    public static List<string> OracleTokens(IEnumerable<EvPair> pairs, EvConfig cfg, DateTime nowUtc)
+        => pairs.Where(p => p.IsDerivative || cfg.IsLiveSport(p.KalshiTicker) || !cfg.ShadowNearOnly
+                            || ShadowActive(p, nowUtc, cfg.ShadowLeadMin, cfg.ShadowMaxLiveMin))
+                .SelectMany(p => p.Legs).Distinct(StringComparer.Ordinal).ToList();
 
     /// <summary>Which pipeline each pair belongs to: derivatives to their own; moneylines of a LIVE sport to
     /// the main one; every other moneyline to the shadow one. ONE function for startup and reload, so the two

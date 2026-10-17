@@ -101,11 +101,19 @@ CATALOG: dict[str, Sport] = {
     # so an unset id can never be mistaken for sport 0.
     # Kalshi series enumerated live 2026-08-10; durations are ESTIMATES (they only size the window tail).
     "basketball": Sport(
-        key="basketball", pinnacle_id=0, duration_min=150,
-        # NBA/NCAAB/Euroleague are OFF-SEASON now (verified to exist via /series) — they ramp in October and
-        # are what makes this sport worth carrying; the six live ones are minor leagues.
-        moneyline=("KXNBAGAME", "KXNCAABGAME", "KXEUROLEAGUEGAME", "KXWNBAGAME",
-                   "KXLNBPGAME", "KXPBAGAME", "KXVBAGAME", "KXBSNGAME", "KXCEBLGAME"),
+        # pinnacle_id 4 = Pinnacle "Basketball", CONFIRMED 2026-10-16 (guest /sports/4/leagues: 102 leagues,
+        # 491 matchups). For KalshiEvBot SHADOW telemetry. Every per-game series Kalshi lists (/series titles
+        # checked 2026-10-16) EXCEPT KXEBASKETBALLGAME, whose rules settle a tie - a market Pinnacle's 2-way
+        # moneyline does not price. Each series' Pinnacle league is in PINNACLE_LEAGUES below, which is what keeps
+        # the catalog walk to the leagues Kalshi can use (~25 of Pinnacle's 102).
+        key="basketball", pinnacle_id=4, duration_min=150,
+        moneyline=("KXNBAGAME", "KXWNBAGAME", "KXNCAAMBGAME", "KXNCAAWBGAME", "KXNCAABGAME",
+                   "KXEUROLEAGUEGAME", "KXEUROCUPGAME", "KXACBGAME", "KXBSLGAME", "KXLNBELITEGAME",
+                   "KXLNBELITE2GAME", "KXVTBGAME", "KXSLBGAME", "KXCZENBLGAME", "KXAUTBSLGAME",
+                   "KXKORISLIIGAGAME", "KXGBLGAME", "KXBBLGAME", "KXBBSERIEAGAME", "KXBBSERIEBGAME",
+                   "KXPLKGAME", "KXISLGAME", "KXJBLEAGUEGAME", "KXCBAGAME", "KXKBLGAME", "KXNBLGAME",
+                   "KXNZNBLGAME", "KXPBAGAME", "KXNBBGAME", "KXLBPGAME", "KXSPBGAME", "KXLNBPGAME",
+                   "KXBSNGAME", "KXCEBLGAME", "KXVBAGAME", "KXBIG3GAME"),
         bia_sport="basket", bia_path="/sportsbook/basketball", enabled=False,
     ),
     "amfootball": Sport(
@@ -140,9 +148,9 @@ CATALOG: dict[str, Sport] = {
         bia_sport="boxing", bia_path="/sportsbook/boxing", enabled=False,
     ),
     "icehockey": Sport(
-        # pinnacle_id 19 = Pinnacle "Hockey" (added 2026-10-16 for KalshiEvBot SHADOW telemetry). Unconfirmed
-        # until the first pairing run, and safe the same way football's 15 was: pairing anchors on the sport
-        # NAME (pair_auto SERIES_SPORT -> "HOCKEY"), so a wrong id yields 0 pairs, never a wrong pair.
+        # pinnacle_id 19 = Pinnacle "Hockey" (added 2026-10-16 for KalshiEvBot SHADOW telemetry), CONFIRMED the
+        # same day (guest /sports/19/leagues: 33 leagues, 202 matchups). Pairing also anchors on the sport NAME
+        # (pair_auto SERIES_SPORT -> "HOCKEY"), so a wrong id would have yielded 0 pairs, never a wrong pair.
         # Series: NHL + the four European leagues that play inside the bot's 06-23 UTC hours (KHL, SHL, Liiga,
         # DEL). NOT listed: KXNCAAHGAME (ties settle 50/50 on Kalshi) and KXAHLGAME (no real market, ~90c spreads).
         # HARDVEN_SERIES_ALLOW picks which actually pair - NHL plays ~23:00-02:30 UTC, so it only earns its
@@ -224,7 +232,7 @@ TIER1_SERIES: set[str] = {
 }
 
 
-def moneyline_series() -> set[str]:
+def moneyline_series(quiet: bool = False) -> set[str]:
     """Kalshi per-game winner series for the active sports — pairHard's default scaffold allowlist.
 
     HARDVEN_SERIES_ALLOW narrows it: `tier1` for the curated shortlist above, or an explicit CSV of series
@@ -247,8 +255,93 @@ def moneyline_series() -> set[str]:
         print(f"[SPORTS] HARDVEN_SERIES_ALLOW={sel!r} matched NONE of the {len(base)} series for the enabled "
               f"sport(s) — ignoring it and watching all of them. Check the spelling.", file=sys.stderr)
         return base
-    print(f"[SPORTS] series allowlist: {len(kept)}/{len(base)} series kept ({sel}).", file=sys.stderr)
+    if not quiet:
+        print(f"[SPORTS] series allowlist: {len(kept)}/{len(base)} series kept ({sel}).", file=sys.stderr)
     return kept
+
+
+# ── WHICH PINNACLE LEAGUES A KALSHI SERIES IS LISTED UNDER (2026-10-16) ───────────────────────────────────────
+# The pairing catalog walks every league of every enabled sport, two guest requests each, every pairing run.
+# That is fine for tennis (its "leagues" are the day's tournament-rounds) but not for the team sports, whose
+# Pinnacle board is far wider than Kalshi's: basketball is 102 leagues and hockey 33 (guest /sports/{id}/leagues,
+# 2026-10-16), against ~25 that any Kalshi series can use. Walking them all would have added ~270 requests to a
+# ~90-request run, every 90 minutes, from the operator's own IP.
+#
+# So for a sport with entries here, the walk keeps only the leagues of the series HARDVEN_SERIES_ALLOW allows.
+# Each entry is a case-insensitive SUBSTRING of Pinnacle's league name ("$" at the end = the name must END
+# there, so "germany - del$" is the DEL and not "Germany - DEL 2"). A league whose name says "Women" is kept
+# only by a pattern that says so too. Names marked * were OBSERVED in that listing; the rest are seasonal
+# leagues Pinnacle was not listing that day, named after its convention. A wrong or missing name costs that
+# league's pairs, never a wrong pair - and the walk logs every league it skipped once per sidecar run.
+# Sports with no entries here (tennis, baseball, football) are walked in full, exactly as before.
+PINNACLE_LEAGUES: dict[str, tuple[str, ...]] = {
+    # basketball
+    "KXNBAGAME": ("nba",),                        # * "NBA", "NBA Preseason" (Kalshi lists preseason games too)
+    "KXWNBAGAME": ("wnba",),                      # * "WNBA"
+    "KXNCAAMBGAME": ("ncaa",), "KXNCAABGAME": ("ncaa",),   # * "NCAA"
+    "KXNCAAWBGAME": ("ncaa women", "ncaaw"),
+    "KXEUROLEAGUEGAME": ("euroleague",), "KXEUROCUPGAME": ("eurocup",),
+    "KXACBGAME": ("spain - acb",),                # *
+    "KXBSLGAME": ("turkey - super league",),      # * (Women excluded; "TBL First League" is the 2nd tier)
+    "KXLNBELITEGAME": ("france - championnat pro a",),   # * LNB Elite under its old name
+    "KXLNBELITE2GAME": ("france - championnat pro b",),
+    "KXVTBGAME": ("vtb united",),                 # * "Europe - VTB United League"
+    "KXSLBGAME": ("british - slb",),              # *
+    "KXCZENBLGAME": ("czech republic - nbl",),    # *
+    "KXAUTBSLGAME": ("austria - superliga",),     # * "Austria - SuperLiga"
+    "KXKORISLIIGAGAME": ("finland - korisliiga",),   # *
+    "KXGBLGAME": ("greek basket league",),        # *
+    "KXBBLGAME": ("germany - bbl$",),             # the league, not "Germany - BBL Pokal" (the cup) *
+    "KXBBSERIEAGAME": ("italy - lega a$",),       # * "Italy - Lega A"
+    "KXBBSERIEBGAME": ("italy - serie b",),
+    "KXPLKGAME": ("poland - basket liga",),       # *
+    "KXISLGAME": ("israel - premier league", "israel - super league"),   # * the first
+    "KXJBLEAGUEGAME": ("japan - b.league",),      # * "B.League Premier" and "B.League One"
+    "KXCBAGAME": ("china - cba",),                # *
+    "KXKBLGAME": ("korean - kbl",),               # *
+    "KXNBLGAME": ("australia - nbl",),            # *
+    "KXNZNBLGAME": ("new zealand - nbl",),
+    "KXPBAGAME": ("philippines - pba",),          # * "Philippines - PBA Governors Cup"
+    "KXNBBGAME": ("brazil - novo basquete",),     # *
+    "KXLBPGAME": ("colombia - baloncesto profesional",),   # *
+    "KXSPBGAME": ("venezuela",),
+    "KXLNBPGAME": ("lnbp",),
+    "KXBSNGAME": ("puerto rico - superior nacional",),     # (only the Women's league was listed)
+    "KXCEBLGAME": ("cebl", "canadian elite"),
+    "KXVBAGAME": ("vietnam",),
+    "KXBIG3GAME": ("big3", "big 3"),
+    # hockey
+    "KXNHLGAME": ("nhl",),                        # *
+    "KXKHLGAME": ("kontinental",),                # * "Russia - Kontinental Hockey League"
+    "KXSHLGAME": ("sweden - shl",),               # *
+    "KXLIIGAGAME": ("sm liiga",),                 # * "Finland - SM Liiga"
+    "KXDELGAME": ("germany - del$",),             # *
+}
+
+
+def league_filter(pinnacle_id: int) -> tuple[str, ...] | None:
+    """League-name patterns the catalog walk keeps for this Pinnacle sport: those of its ALLOWED series only.
+    None = the sport is not league-filtered (no PINNACLE_LEAGUES entries) or not enabled - walk every league,
+    as before. An empty tuple = filtered, with no series allowed: walk none of its leagues."""
+    sport = next((s for s in enabled_sports() if s.pinnacle_id == pinnacle_id), None)
+    if sport is None or not any(m in PINNACLE_LEAGUES for m in sport.moneyline):
+        return None
+    allowed = moneyline_series(quiet=True)
+    return tuple(dict.fromkeys(p for m in sport.moneyline if m in allowed for p in PINNACLE_LEAGUES.get(m, ())))
+
+
+def league_wanted(name: str, patterns) -> bool:
+    """Does a Pinnacle league NAME match one of `patterns` (see PINNACLE_LEAGUES for the rules)?"""
+    n = " ".join((name or "").lower().split())
+
+    def hit(p: str) -> bool:
+        p = p.lower()
+        return n.endswith(p[:-1]) if p.endswith("$") else p in n
+
+    matched = [p for p in patterns if hit(p)]
+    if not matched:
+        return False
+    return "women" not in n or any("women" in p.lower() for p in matched)
 
 
 def derivative_series() -> dict[str, tuple[str, int]]:

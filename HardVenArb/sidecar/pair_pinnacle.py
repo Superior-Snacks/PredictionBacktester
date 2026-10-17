@@ -40,6 +40,7 @@ from pair_auto import (
     _expected_sports, _kalshi_dt, fetch_catalog, price_validate, fuzz,
 )
 from env_util import atomic_write_json
+import sports as sports_cfg
 
 
 # ── Pinnacle selection_id = "{leagueId}:{matchupId}:{designation}" ──────────────
@@ -94,8 +95,11 @@ _NFL_CITY = {
 }
 
 
-# Kalshi series that are 2-way winner markets (OT/shootout included) and so must never pair a 3-way line.
-_TWO_WAY_ONLY = {"KXNHLGAME", "KXKHLGAME", "KXSHLGAME", "KXLIIGAGAME", "KXDELGAME"}
+# Kalshi series that are 2-way winner markets (OT/shootout included) and so must never pair a 3-way line: every
+# hockey and basketball series in the unified catalog - derived, so a series added to sports.py is covered too.
+# A backstop: the catalog flags only soccer three_way today, and the EV bot's incomplete-book check rejects a
+# home/away pair cut from a 3-way book (its prices sum well under 1).
+_TWO_WAY_ONLY = {s for k in ("icehockey", "basketball") for s in sports_cfg.CATALOG[k].moneyline}
 
 
 def _canon_team(key: str, ticker: str) -> str:

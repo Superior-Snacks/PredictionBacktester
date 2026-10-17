@@ -705,6 +705,15 @@ public static class SelfTest
                       "KHL/SHL/Liiga/DEL markets are hockey, not soccer (they end in GAME)");
                 Check(!new EvConfig().IsLiveSport("KXKHLGAME-26OCT181010AKBDIN-DIN"),
                       "a hockey market is never live by default - shadow only");
+                Check(EvSports.Of("KXACBGAME-26OCT171200MALMAN-MAL") == "basketball"
+                      && EvSports.Of("KXJBLEAGUEGAME-26OCT170005SSMJET-JET") == "basketball"
+                      && EvSports.Of("KXVTBGAME-26OCT170500CMOENI-CMO") == "basketball"
+                      && EvSports.Of("KXNBAGAME-26OCT16BOSPHI-BOS") == "basketball",
+                      "ACB/B.League/VTB/NBA markets are basketball, not soccer (they end in GAME)");
+                Check(EvSports.Of("KXEBASKETBALLGAME-X-A") == "other",
+                      "eBasketball (a tie-rule video game market) is not filed as basketball or soccer");
+                Check(!new EvConfig().IsLiveSport("KXACBGAME-26OCT171200MALMAN-MAL"),
+                      "a basketball market is never live by default - shadow only");
                 Check(EvSports.Of("KXSOMETHINGNEW-X") == "other", "an unknown series reads other, not soccer");
                 Check(Calibration.Sport("KXNFLGAME-26OCT11KCBUF-KC") == "football",
                       "the report's Sport() is the router's function, so the two cannot disagree");
@@ -780,6 +789,96 @@ public static class SelfTest
                 Program.ReplaceContents(held, new[] { P("KXATPMATCH-NEW-A"), P("KXATPMATCH-NEW2-A") });
                 Check(ReferenceEquals(held, alias) && held.Count == 2 && held.All(x => x.KalshiTicker.Contains("NEW")),
                       "a reload refreshes the SAME list instance the snapshot loop holds");
+
+                // THE SHADOW SCOPE (2026-10-16): a shadow game is polled only from LEAD_MIN before its listed start
+                // to MAX_LIVE_MIN after. Pinnacle lists NBA/NHL days ahead, and polling all of them all day would
+                // grow /odds at tennis's busiest hour for prices nothing can trade. Tennis and derivatives: never scoped.
+                string?[] savedScope = { Environment.GetEnvironmentVariable("EV_SHADOW_NEAR_ONLY"),
+                                         Environment.GetEnvironmentVariable("EV_SHADOW_LEAD_MIN"),
+                                         Environment.GetEnvironmentVariable("EV_SHADOW_MAX_LIVE_MIN") };
+                try
+                {
+                    Environment.SetEnvironmentVariable("EV_LIVE_SPORTS", null);
+                    Environment.SetEnvironmentVariable("EV_SHADOW_NEAR_ONLY", null);
+                    Environment.SetEnvironmentVariable("EV_SHADOW_LEAD_MIN", null);
+                    Environment.SetEnvironmentVariable("EV_SHADOW_MAX_LIVE_MIN", null);
+                    var cfgSc = new EvConfig();
+                    Check(cfgSc.ShadowNearOnly && cfgSc.ShadowLeadMin == 30 && cfgSc.ShadowMaxLiveMin == 300,
+                          "the scope is ON by default: 30 min before the listed start to 300 min after",
+                          $"{cfgSc.ShadowNearOnly} {cfgSc.ShadowLeadMin} {cfgSc.ShadowMaxLiveMin}");
+
+                    var tSc = new DateTime(2026, 10, 18, 20, 0, 0, DateTimeKind.Utc);
+                    EvPair SP(string tk, DateTime? start, string type = "moneyline") =>
+                        new(tk, tk + "-EVT", "A vs B", "", "", "2026-10-18", tk + ":a", tk + ":b",
+                            "A", "B", false, new[] { tk + ":a", tk + ":b" }, type, double.NaN, start);
+                    bool InScope(double startInMin) =>
+                        EvSports.ShadowActive(SP("KXNFLGAME-X-KC", tSc.AddMinutes(startInMin)), tSc, 30, 300);
+                    Check(!InScope(60), "a shadow game an hour from its start is OUT of scope");
+                    Check(InScope(30) && InScope(20), "...in from 30 min before it (the boundary included)");
+                    Check(InScope(-120) && InScope(-300), "...and while it plays, to 300 min after the start (included)");
+                    Check(!InScope(-360), "6h past its start it is out again - finished, nothing left to price");
+                    Check(EvSports.ShadowActive(SP("KXNFLGAME-X-KC", null), tSc, 30, 300),
+                          "an UNKNOWN start is always in scope (a missing field costs polling, never coverage)");
+
+                    var scMix = new[]
+                    {
+                        SP("KXATPMATCH-FAR-A", tSc.AddHours(10)),             // tennis: never scoped
+                        SP("KXATPGTOTAL-FAR-39", tSc.AddHours(10), "total"),  // derivative: never scoped
+                        SP("KXNFLGAME-FAR-KC", tSc.AddDays(2)),
+                        SP("KXNBAGAME-NEAR-LAL", tSc.AddMinutes(20)),
+                        SP("KXNHLGAME-LIVE-BOS", tSc.AddMinutes(-90)),
+                        SP("KXMLBGAME-NOSTART-NYY", null),
+                        SP("KXKHLGAME-DONE-DIN", tSc.AddHours(-6)),
+                    };
+                    var polled = EvSports.OracleTokens(scMix, cfgSc, tSc).ToHashSet();
+                    bool HasLegs(string tk) => polled.Contains(tk + ":a") && polled.Contains(tk + ":b");
+                    Check(HasLegs("KXATPMATCH-FAR-A") && HasLegs("KXATPGTOTAL-FAR-39"),
+                          "tennis and derivatives are polled however far off - the scope is for shadow games only");
+                    Check(!polled.Any(t => t.StartsWith("KXNFLGAME-FAR")),
+                          "a shadow game two days out is NOT polled (no /odds, no league socket, no REST check)");
+                    Check(HasLegs("KXNBAGAME-NEAR-LAL") && HasLegs("KXNHLGAME-LIVE-BOS") && HasLegs("KXMLBGAME-NOSTART-NYY"),
+                          "near, in-play and unknown-start shadow games ARE polled, every leg");
+                    Check(!polled.Any(t => t.StartsWith("KXKHLGAME-DONE")), "a finished shadow game is dropped");
+                    Check(polled.Count == 2 * 5, "...and nothing else is in the set", $"{polled.Count}");
+
+                    Check(EvSports.OracleTokens(scMix, new EvConfig { ShadowNearOnly = false }, tSc).Count == 2 * scMix.Length,
+                          "EV_SHADOW_NEAR_ONLY=0 polls every pair, as before 2026-10-16");
+
+                    Environment.SetEnvironmentVariable("EV_LIVE_SPORTS", "tennis,football");
+                    Check(EvSports.OracleTokens(scMix, new EvConfig(), tSc).Contains("KXNFLGAME-FAR-KC:a"),
+                          "a sport promoted to EV_LIVE_SPORTS is never scoped - live trading sees every game");
+                    Environment.SetEnvironmentVariable("EV_LIVE_SPORTS", null);
+
+                    // THE LOADER reads the start from hardven_start_time as UTC; absent or garbage = unknown.
+                    string scDir = Path.Combine(Path.GetTempPath(), "evscope_" + Guid.NewGuid().ToString("N"));
+                    Directory.CreateDirectory(scDir);
+                    try
+                    {
+                        string ScRow(string tk, int m, string? st) =>
+                            "{\"kalshi_ticker\":\"" + tk + "\",\"event_id\":\"" + tk + "\",\"event_title\":\"A vs B\","
+                          + "\"kalshi_outcome\":\"A\",\"settlement_date\":\"2026-10-18\","
+                          + "\"hardven_yes_token\":\"9:" + m + ":home\",\"hardven_no_token\":\"9:" + m + ":away\""
+                          + (st is null ? "" : ",\"hardven_start_time\":\"" + st + "\"") + "}";
+                        string scFile = Path.Combine(scDir, "scope.json");
+                        File.WriteAllText(scFile, "[" + string.Join(",", ScRow("K-UTC", 101, "2026-10-18T20:05:00Z"),
+                                                        ScRow("K-NONE", 102, null), ScRow("K-JUNK", 103, "soon")) + "]");
+                        var scLoaded = EvPairLoader.Load(scFile, out _).ToDictionary(x => x.KalshiTicker);
+                        Check(scLoaded.Count == 3, "all three rows load, start or no start", $"{scLoaded.Count}");
+                        Check(scLoaded.TryGetValue("K-UTC", out var scU) && scU.StartUtc is DateTime su
+                              && su == new DateTime(2026, 10, 18, 20, 5, 0) && su.Kind == DateTimeKind.Utc,
+                              "hardven_start_time loads as a UTC instant", $"{scU?.StartUtc:o}");
+                        Check(scLoaded.TryGetValue("K-NONE", out var scN) && scN.StartUtc is null
+                              && scLoaded.TryGetValue("K-JUNK", out var scJ) && scJ.StartUtc is null,
+                              "a missing or unparseable start loads as unknown (always in scope)");
+                    }
+                    finally { try { Directory.Delete(scDir, true); } catch { } }
+                }
+                finally
+                {
+                    Environment.SetEnvironmentVariable("EV_SHADOW_NEAR_ONLY", savedScope[0]);
+                    Environment.SetEnvironmentVariable("EV_SHADOW_LEAD_MIN", savedScope[1]);
+                    Environment.SetEnvironmentVariable("EV_SHADOW_MAX_LIVE_MIN", savedScope[2]);
+                }
             }
             finally { Environment.SetEnvironmentVariable("EV_LIVE_SPORTS", savedLive); }
         }

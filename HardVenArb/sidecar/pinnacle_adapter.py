@@ -477,6 +477,7 @@ class PinnacleAdapter(BookAdapter):
         self._catalog_sports = [x.strip() for x in
                                 os.environ.get("PINNACLE_CATALOG_SPORTS", _default_catalog_sports).split(",")
                                 if x.strip()]
+        self._league_skips_logged: set[str] = set()      # sport ids whose skipped leagues were listed this run
         # DRIFT GUARD: an explicit PINNACLE_CATALOG_SPORTS that omits an ENABLED sport (HARDVEN_SPORTS) is the
         # silent-0-pairs trap — that sport SCHEDULES + SCAFFOLDS but its games never enter /catalog, so pairing
         # matches them against the wrong board → 0 fills. Warn loudly at startup (only when explicitly set + short).
@@ -3382,9 +3383,27 @@ class PinnacleAdapter(BookAdapter):
         board with no hand-editing."""
         ids = list(self._catalog_leagues)
         for sid in self._catalog_sports:
+            # Team sports with a Kalshi league map (sports.PINNACLE_LEAGUES) walk only the leagues of the ALLOWED
+            # series - basketball is 102 Pinnacle leagues against ~25 Kalshi can use. None = walk all, as before.
+            pats = sports_cfg.league_filter(int(sid)) if str(sid).strip().isdigit() else None
+            kept, skipped = [], []
             for l in (await self._guest_get(f"/sports/{sid}/leagues") or []):
-                if (l.get("matchupCount") or 0) > 0 and "doubles" not in (l.get("name", "") or "").lower():
+                name = l.get("name", "") or ""
+                if (l.get("matchupCount") or 0) > 0 and "doubles" not in name.lower():
+                    if pats is not None and not sports_cfg.league_wanted(name, pats):
+                        skipped.append((l.get("matchupCount") or 0, name))
+                        continue
                     ids.append(str(l.get("id")))
+                    kept.append(name)
+            if pats is not None:
+                print(f"[PINNACLE] catalog: sport {sid}: walking {len(kept)} of {len(kept) + len(skipped)} "
+                      f"league(s), those of the allowed Kalshi series: {', '.join(kept) or 'none'}", flush=True)
+                if skipped and sid not in self._league_skips_logged:   # once per run: a missed league is findable
+                    self._league_skips_logged.add(sid)
+                    top = sorted(skipped, key=lambda x: -x[0])
+                    more = f", ... +{len(top) - 30} smaller" if len(top) > 30 else ""
+                    print(f"[PINNACLE] catalog: sport {sid}: skipped {len(top)} league(s) no allowed series maps to, "
+                          f"biggest first: {', '.join(f'{n} ({c})' for c, n in top[:30])}{more}", flush=True)
         return list(dict.fromkeys(ids))   # dedupe, preserve order
 
     async def catalog(self) -> list[CatalogEntry]:

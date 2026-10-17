@@ -186,6 +186,15 @@ SERIES_SPORT = {
     "KXBSLGAME": {"BASKETBALL"}, "KXLNBELITEGAME": {"BASKETBALL"}, "KXNZNBLGAME": {"BASKETBALL"},
     "KXPLKGAME": {"BASKETBALL"}, "KXSPBGAME": {"BASKETBALL"}, "KXVBAGAME": {"BASKETBALL"},
     "KXBSNGAME": {"BASKETBALL"}, "KXBIG3GAME": {"BASKETBALL"}, "KXISLGAME": {"BASKETBALL"},
+    # The rest of sports.py's basketball series (2026-10-16). Without an anchor a Kalshi "Liverpool vs Bristol
+    # Flyers" or "CSKA Moscow vs ..." could match the soccer or hockey club of the same name.
+    "KXNCAAMBGAME": {"BASKETBALL"}, "KXNCAAWBGAME": {"BASKETBALL"}, "KXNCAABGAME": {"BASKETBALL"},
+    "KXEUROLEAGUEGAME": {"BASKETBALL"}, "KXEUROCUPGAME": {"BASKETBALL"}, "KXLNBELITE2GAME": {"BASKETBALL"},
+    "KXVTBGAME": {"BASKETBALL"}, "KXSLBGAME": {"BASKETBALL"}, "KXCZENBLGAME": {"BASKETBALL"},
+    "KXAUTBSLGAME": {"BASKETBALL"}, "KXKORISLIIGAGAME": {"BASKETBALL"}, "KXGBLGAME": {"BASKETBALL"},
+    "KXJBLEAGUEGAME": {"BASKETBALL"}, "KXCBAGAME": {"BASKETBALL"}, "KXKBLGAME": {"BASKETBALL"},
+    "KXNBLGAME": {"BASKETBALL"}, "KXPBAGAME": {"BASKETBALL"}, "KXNBBGAME": {"BASKETBALL"},
+    "KXLBPGAME": {"BASKETBALL"}, "KXLNBPGAME": {"BASKETBALL"}, "KXCEBLGAME": {"BASKETBALL"},
     # KXNCAABBGAME is College BASEBALL (Kalshi /series title "College Baseball Game", checked 2026-10-09),
     # not basketball - it was anchored to the wrong sport. College basketball is KXNCAABGAME / KXNCAAMBGAME /
     # KXNCAAWBGAME; which of those carries games is only visible once the season lists them (November).

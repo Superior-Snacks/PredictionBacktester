@@ -24,7 +24,8 @@ public sealed record EvPair(
     bool ThreeWay,
     IReadOnlyList<string> Legs,   // every mutually-exclusive outcome of the matchup, YesToken among them
     string MarketType = "moneyline",   // "moneyline" | "spread" | "total"
-    double Line = double.NaN)          // handicap/total the derivative is struck at; NaN on a moneyline
+    double Line = double.NaN,          // handicap/total the derivative is struck at; NaN on a moneyline
+    DateTime? StartUtc = null)         // Pinnacle's listed start (hardven_start_time); null = unknown
 {
     /// <summary>
     /// <b>The trap this type exists to close.</b> On a two-way, <c>NoToken</c> is the complement of
@@ -190,9 +191,14 @@ public static class EvPairLoader
             else legs = new List<string> { yes, no };
             if (isDeriv) derivCount++;
 
+            // The listed start, for the shadow scope (EvSports.ShadowActive). Unparseable or absent = unknown,
+            // which the scope treats as ALWAYS active - a missing field may cost polling, never coverage.
+            DateTime? start = DateTime.TryParse(S("hardven_start_time"), System.Globalization.CultureInfo.InvariantCulture,
+                                  System.Globalization.DateTimeStyles.AdjustToUniversal
+                                | System.Globalization.DateTimeStyles.AssumeUniversal, out var st) ? st : null;
             all.Add(new EvPair(ticker, S("event_id"), S("event_title"), S("kalshi_outcome"), S("label"),
                                S("settlement_date"), yes, no, S("hardven_yes_name"), S("hardven_no_name"),
-                               threeWay, legs, marketType, line));
+                               threeWay, legs, marketType, line, start));
         }
         if (noTokens > 0)
             report.Add($"{noTokens} row(s) skipped: unpaired (no Pinnacle token). A one-sided row cannot be "

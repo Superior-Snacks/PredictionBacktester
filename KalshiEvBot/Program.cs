@@ -275,8 +275,9 @@ internal static class Program
         // YesTokens happen to cover home, away and draw — but only while all three markets pair. Let the
         // Tie row fail to match and the draw token still sits in its siblings' Legs while nothing ever
         // fetches it, so every row of that event returns NoQuote forever with nothing in the log to say why.
-        var tokens  = pairs.SelectMany(p => p.Legs)
-                           .Distinct(StringComparer.Ordinal).ToList();
+        // ...and since 2026-10-16 only the shadow pairs inside their scope (EvSports.OracleTokens): a shadow
+        // game days from its start is neither polled nor REST-checked; ShadowScopeLoopAsync brings it in.
+        var tokens  = EvSports.OracleTokens(pairs, cfg, DateTime.UtcNow);
 
         using var kalshi    = new KalshiOrderClient(config);
         using var telemetry = new EvTelemetry();
@@ -389,6 +390,11 @@ internal static class Program
             Console.WriteLine($"[SHADOW ] {shPairs.Count} pair(s){(mix.Length > 0 ? $" ({mix})" : "")} — OBSERVE-ONLY. "
                             + $"Live sports: {string.Join(",", cfg.LiveSports)} (EV_LIVE_SPORTS). Files EvShadow*_<date>.csv "
                             + "from the first row; graded by --resolve-shadow.");
+            Console.WriteLine(cfg.ShadowNearOnly
+                ? $"[SHADOW ] scope: a shadow game is polled only from {cfg.ShadowLeadMin:0} min before its listed start "
+                + $"to {cfg.ShadowMaxLiveMin:0} min after (EV_SHADOW_NEAR_ONLY / _LEAD_MIN / _MAX_LIVE_MIN) - "
+                + $"{shPairs.Count(p => EvSports.ShadowActive(p, DateTime.UtcNow, cfg.ShadowLeadMin, cfg.ShadowMaxLiveMin))} in scope now."
+                : "[SHADOW ] scope: OFF (EV_SHADOW_NEAR_ONLY=0) - every shadow pair is polled from the moment it is paired.");
         }
 
         kalshi.RateLimitRetryLogger = i =>
@@ -671,6 +677,11 @@ internal static class Program
         // is header-only while its queue grew for the life of the process.
         var followDTask  = followUpD?.RunAsync(cts.Token) ?? Task.CompletedTask;
         var followSTask  = followUpS?.RunAsync(cts.Token) ?? Task.CompletedTask;
+        // Time moves games into and out of scope without the pair file changing, so the polled set is re-derived
+        // on a clock too - from the SAME lists the reload loop refreshes in place, by the SAME function.
+        var scopeTask    = evalS is not null && cfg.ShadowNearOnly
+                         ? ShadowScopeLoopAsync(oracle, mlPairs, dvPairs, shPairs, cfg, cts.Token)
+                         : Task.CompletedTask;
 
         // Bank settlements WHILE THE BOT RUNS. Kalshi does not keep obscure markets available forever, so
         // resolving days later is a race we can only lose — and lose silently, since a purged market is
@@ -1231,7 +1242,6 @@ internal static class Program
                 var newTickers = routed.Select(p => p.KalshiTicker)
                                        .Where(t => !everSeen.Contains(t)).Distinct(StringComparer.Ordinal).ToList();
                 feed.EnqueueSubscribe(newTickers);
-                var (newTokens, goneTokens) = oracle.SetTokens(routed.SelectMany(p => p.Legs));
 
                 // One lock per resource, each taken consistently everywhere it is touched: `pairsLock`
                 // guards everSeen (shared with the settlement watcher), the list instance guards itself
@@ -1256,6 +1266,12 @@ internal static class Program
                 ReplaceContents(mlList, ml);
                 ReplaceContents(dvList, dv);
                 ReplaceContents(shList, sh);
+                // AFTER the lists hold the new contents, and under the lock ShadowScopeLoopAsync derives its set
+                // in: otherwise a scope pass that read the OLD lists could land its SetTokens after this one and
+                // un-poll a just-paired tennis match for a minute.
+                int newTokens, goneTokens;
+                lock (OracleScopeLock)
+                    (newTokens, goneTokens) = oracle.SetTokens(EvSports.OracleTokens(routed, cfg, DateTime.UtcNow));
 
                 if (newPairs > 0 || newTokens > 0 || dropped > 0 || goneTokens > 0 || newShadow > 0 || droppedShadow > 0)
                     Console.WriteLine($"[PAIRS] reloaded: +{newPairs}/-{dropped} market(s), "
@@ -1268,6 +1284,42 @@ internal static class Program
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { Console.WriteLine($"[PAIRS] reload error: {ex.GetType().Name}: {ex.Message}"); }
+        }
+    }
+
+    private static readonly object OracleScopeLock = new();
+
+    /// <summary>Re-derives the oracle's polled set once a minute so shadow games enter their scope ~LEAD_MIN before
+    /// their start and leave it after MAX_LIVE_MIN, whether or not the pair file changed. Tennis and derivative
+    /// selections are always in the set, so a pass can only add or drop shadow selections.</summary>
+    private static async Task ShadowScopeLoopAsync(PinnacleOracle oracle, List<EvPair> ml, List<EvPair> dv,
+                                                   List<EvPair> sh, EvConfig cfg, CancellationToken ct)
+    {
+        int lastInScope = -1;
+        while (!ct.IsCancellationRequested)
+        {
+            try { await Task.Delay(TimeSpan.FromSeconds(60), ct); } catch (OperationCanceledException) { break; }
+            try
+            {
+                List<EvPair> shadow;
+                int added, removed;
+                var now = DateTime.UtcNow;
+                lock (OracleScopeLock)   // read + derive + set as one step against the reload loop's (see there)
+                {
+                    var all = new List<EvPair>();
+                    lock (ml) all.AddRange(ml);
+                    lock (dv) all.AddRange(dv);
+                    lock (sh) shadow = sh.ToList();
+                    all.AddRange(shadow);
+                    (added, removed) = oracle.SetTokens(EvSports.OracleTokens(all, cfg, now));
+                }
+                int inScope = shadow.Count(p => EvSports.ShadowActive(p, now, cfg.ShadowLeadMin, cfg.ShadowMaxLiveMin));
+                if (inScope != lastInScope || added > 0 || removed > 0)
+                    Console.WriteLine($"[SHADOW ] scope: {inScope} of {shadow.Count} shadow pair(s) near or in play "
+                                    + $"(+{added}/-{removed} Pinnacle selection(s); {oracle.TokenCount} polled in total).");
+                lastInScope = inScope;
+            }
+            catch (Exception ex) { Console.WriteLine($"[SHADOW ] scope pass error: {ex.GetType().Name}: {ex.Message}"); }
         }
     }
 
