@@ -68,7 +68,31 @@ def _league_id(sid: str) -> int:
 # side to a token Pinnacle's name still CONTAINS ("athletics"), so containment then scores 100. Add entries
 # here as new abbreviation mismatches surface (the price gate / a manual check is the backstop).
 _TEAM_ALIASES = {"a s": "athletics", "as": "athletics", "oakland": "athletics", "sacramento": "athletics",
-                 "chicago ws": "white sox"}   # Kalshi "Chicago WS" ⊄ Pinnacle "Chicago White Sox" (scores 82)
+                 "chicago ws": "white sox",   # Kalshi "Chicago WS" ⊄ Pinnacle "Chicago White Sox" (scores 82)
+                 # Hockey + basketball (2026-10-17): games Pinnacle LISTED that the first runs left unpaired, read
+                 # off guest /leagues/{id}/matchups. Pinnacle's names are mostly SPONSOR names. The alias is the
+                 # shortest DISTINCTIVE part of Pinnacle's name rather than all of it, because one alias serves
+                 # every league: "valencia" is in "Valencia BC" (ACB) and "Valencia Basket" (EuroLeague) alike,
+                 # where mapping to "valencia bc" would break the second. Both teams must still match one game.
+                 "schwenninger wild wings": "wild wings",          # SERC Wild Wings
+                 "red bull munich": "munchen",                     # EHC Munchen
+                 "nuremberg ice tigers": "nurnberg",               # Nurnberg Ice Tigers
+                 "torpedo nizhny novgorod": "torpedo n novgorod",  # Torpedo N. Novgorod
+                 "cb coruna": "coruna",                            # Leyma Basquet Coruna
+                 "caprabo lleida": "lleida",                       # Forca Lleida
+                 "basket zaragoza 2002": "zaragoza",               # Zaragoza
+                 "valencia basket": "valencia",                    # Valencia BC
+                 "cb 1939 canarias": "tenerife",                   # La Laguna Tenerife
+                 "fc barcelona": "barcelona",                      # Barcelona
+                 "eagles graz": "graz",                            # UBSC Graz
+                 "universo treviso basket": "treviso",             # Treviso
+                 "pallacanestro trieste 2004": "trieste",          # Pallacanestro Trieste
+                 "hapoel galil elyon": "galil elion",              # Hapoel Galil Elion
+                 "paris basketball": "paris",                      # Paris
+                 "cruzeiro basquete": "cruzeiro",                  # Cruzeiro
+                 "basquete osasco": "osasco",                      # Basket Osasco
+                 "zenit saint petersburg": "zenit",                # Zenit St Petersburg
+                 "bc lokomotiv kuban": "lokomotiv kuban"}          # Lokomotiv Kuban
 
 
 def _canon(key: str) -> str:

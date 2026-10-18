@@ -1080,7 +1080,13 @@ class PinnacleAdapter(BookAdapter):
             # stable pre-match line never arrives over the WS until it moves. One /markets/straight snapshot
             # populates every current game (pre-match + live); the WS keeps them fresh after. Mimics the
             # browser exactly (initial REST snapshot, then WS — no re-polling).
-            for lid in [l for l in list(self._active_leagues.keys()) if l not in self._seeded]:
+            # The PRUNED set, not the raw dict (2026-10-17): pruning runs in the socket loops, which are off
+            # between windows, so a dark period accumulates every league the bot asked about and then stopped
+            # (finished tennis rounds, shadow games leaving scope) - 36 against 16 live after one evening. All of
+            # them were seeded here, one REST GET each, in sequence, inside the first /odds of the window, so the
+            # tennis leagues the bot does want waited behind them. The leagues of THIS call were stamped just
+            # above, so they always survive the prune.
+            for lid in [l for l in self._active_league_ids() if l not in self._seeded]:
                 self._seeded.add(lid)                     # add before await so concurrent /odds don't double-seed
                 if self._window_ws_read and not self._dedicated_ws:
                     await self._reseed_league(lid)        # reader mode: seed from PINNACLE_RESEED_SOURCE (authed
