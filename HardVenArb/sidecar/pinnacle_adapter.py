@@ -478,6 +478,7 @@ class PinnacleAdapter(BookAdapter):
                                 os.environ.get("PINNACLE_CATALOG_SPORTS", _default_catalog_sports).split(",")
                                 if x.strip()]
         self._league_skips_logged: set[str] = set()      # sport ids whose skipped leagues were listed this run
+        self._last_http_status: Optional[int] = None      # last venue HTTP status (authed or guest) - _league_pass
         # DRIFT GUARD: an explicit PINNACLE_CATALOG_SPORTS that omits an ENABLED sport (HARDVEN_SPORTS) is the
         # silent-0-pairs trap — that sport SCHEDULES + SCAFFOLDS but its games never enter /catalog, so pairing
         # matches them against the wrong board → 0 fills. Warn loudly at startup (only when explicitly set + short).
@@ -2187,12 +2188,10 @@ class PinnacleAdapter(BookAdapter):
                 continue
             self._ka_inplay_noted = False
             leagues = self._active_league_ids()
-            for lid in leagues:
-                if self._ws_gave_up:
-                    break                                     # session died mid-cycle → stop immediately
-                await self._refresh_league(lid)
-                await asyncio.sleep(random.uniform(0, self._jitter_ms / 1000.0))   # gentle spacing
-            if leagues and not self._ws_gave_up:
+            # Stops on a dead session (session died mid-cycle) and at the first venue 5xx - see _league_pass.
+            _, stopped = await self._league_pass(leagues, self._refresh_league, "session-keepalive",
+                                                 stop_on_giveup=True)
+            if leagues and not self._ws_gave_up and stopped is None:
                 live_sel = sum(1 for s in self._cache.values() if getattr(s, "live", False))
                 # Of the tokens the C# bot actually WATCHES (paired), how many are live right now? If this stays
                 # 0 while `live_sel` (the whole cache) is high, the paired games' live data isn't reaching their
@@ -3056,6 +3055,33 @@ class PinnacleAdapter(BookAdapter):
                   f"this unblocks itself the moment the probe succeeds.", flush=True)
         return True
 
+    async def _league_pass(self, leagues: list, fetch, label: str, stop_on_giveup: bool = False):
+        """One request per league with the usual jitter - the shape of the session keepalive and the reader
+        re-seed. Returns (sum of fetch's results, the 5xx code it stopped on or None).
+
+        STOPS AT THE FIRST VENUE 5xx (2026-10-19). Pinnacle went down at ~11:01 and the next keepalive pass
+        sent all 19 of its league GETs into the 503, one after another. The first answer already says the
+        venue is down; the rest only add traffic to an outage. The pass ends there and the next one, a cadence
+        later, asks again with a single request. The maintenance latch is unchanged - it still trips on the
+        guest API and re-checks at the next window, not in between.
+
+        `_last_http_status` is shared, so a concurrent call's answer can land between this fetch and the check:
+        a 5xx there is the venue down all the same, and a 200 over ours costs one more request at most."""
+        total = 0
+        for i, lid in enumerate(leagues):
+            if stop_on_giveup and self._ws_gave_up:
+                break
+            self._last_http_status = None              # a fetch that sends nothing (blocked) must not inherit one
+            total += (await fetch(lid)) or 0
+            code = self._last_http_status
+            if code in maintenance.MAINT_CODES:
+                print(f"[PINNACLE] {label}: HTTP {code} on league {lid} - the venue looks down; pass stopped after "
+                      f"{i + 1} of {len(leagues)} request(s) rather than sending the rest into it.", flush=True)
+                return total, code
+            if self._jitter_ms > 0:
+                await asyncio.sleep(random.uniform(0, self._jitter_ms / 1000.0))   # gentle spacing
+        return total, None
+
     async def _refresh_league(self, lid: str) -> None:
         """One-shot pre-match SNAPSHOT seed of a league (moneyline + spread + total) via the AUTHED API. Prices
         carry `designation` (home/away/draw or over/under) and `points` DIRECTLY — exactly like the WS — via the
@@ -3220,15 +3246,15 @@ class PinnacleAdapter(BookAdapter):
             if not leagues:
                 continue
             t0 = time.perf_counter()
-            applied = 0
-            for lid in leagues:
+
+            async def _one(lid):
                 try:
-                    applied += await self._reseed_league(lid)
+                    return await self._reseed_league(lid)
                 except Exception as ex:
                     print(f"[PINNACLE] reader re-seed error {lid}: {type(ex).__name__}: {ex}")
-                if self._jitter_ms > 0:
-                    await asyncio.sleep(random.uniform(0, self._jitter_ms / 1000.0))
-            if time.time() - self._last_hb >= 30:
+                    return 0
+            applied, stopped = await self._league_pass(leagues, _one, "reader re-seed")
+            if stopped is None and time.time() - self._last_hb >= 30:
                 self._last_hb = time.time()
                 print(f"[PINNACLE] reader re-seed: {len(leagues)} league(s), {applied} token(s) "
                       f"in {time.perf_counter() - t0:.2f}s ({self._reseed_source}; cadence {self._reader_reseed_sec:g}s).")
@@ -3315,7 +3341,9 @@ class PinnacleAdapter(BookAdapter):
             r = await self._http.get(REST_BASE + path)
         except Exception as ex:
             print(f"[PINNACLE] GET {path} error: {type(ex).__name__}: {ex}")
+            self._last_http_status = None
             return None    # network error = TRANSIENT — never a session-death signal (don't touch the fail streak)
+        self._last_http_status = r.status_code          # read by _league_pass (stop at the first venue 5xx)
         if r.status_code == 429:
             if count_429:
                 self._rate_limited = True
@@ -3370,7 +3398,9 @@ class PinnacleAdapter(BookAdapter):
             r = await self._guest_http.get(GUEST_BASE + path)
         except Exception as ex:
             print(f"[PINNACLE] GUEST GET {path} error: {type(ex).__name__}: {ex}")
+            self._last_http_status = None
             return None
+        self._last_http_status = r.status_code          # read by _league_pass (stop at the first venue 5xx)
         maintenance.note_status(r.status_code, f"GUEST GET {path}")   # 5xx latches, 200 releases
         if r.status_code != 200:
             print(f"[PINNACLE] GUEST GET {path} HTTP {r.status_code}")
