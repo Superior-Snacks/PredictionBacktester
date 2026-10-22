@@ -2171,6 +2171,24 @@ public static class Calibration
         return new string(c);
     }
 
+    /// <summary>Section 4f's classification: one entry per SETTLED, SIGNALLED ticker+side (they share an
+    /// outcome), by the best depth any of its signals showed at our limit - "deep" (>= takeCtr), "thin" (> 0) or
+    /// "none" (-1: the ask sat above the limit) - graded at the first signal deep enough, else the first with
+    /// any depth, else the first: the live path buys at whichever signal the book will fill, not only the first
+    /// (see Dedupe). Rows with no depth reading (they predate the column) or no cost are skipped.</summary>
+    internal static List<(string Cls, Obs O)> TakeableSides(IEnumerable<Obs> all, int takeCtr)
+        => all.Where(o => o.IsSignal && o.Won.HasValue && !double.IsNaN(o.WsDepth)
+                       && !double.IsNaN(o.Cost) && !double.IsNaN(o.PUsed))
+              .GroupBy(o => (o.Ticker, o.Side))
+              .Select(g =>
+              {
+                  var l = g.OrderBy(o => o.At).ToList();
+                  var deep = l.FirstOrDefault(o => o.WsDepth >= takeCtr);
+                  var thin = l.FirstOrDefault(o => o.WsDepth > 0);
+                  return (Cls: deep is not null ? "deep" : thin is not null ? "thin" : "none", O: deep ?? thin ?? l[0]);
+              })
+              .ToList();
+
     // ── The report ────────────────────────────────────────────────────────────────────────────────────
     /// <param name="livePrefix">Which pipeline's order log section 7 reads — "EvLive" or "EvDerivLive".
     /// NOT optional-with-a-default on purpose: a default would silently make the derivative report show
@@ -2520,6 +2538,41 @@ public static class Calibration
         }
         Console.WriteLine("   A guard that blocks PROFITABLE candidates is costing money AND slowing the");
         Console.WriteLine("   verdict, because every suppressed trade is a settled sample we never collect.");
+
+        // ── 4f. TAKEABLE OR NOT ───────────────────────────────────────────────────────────────────────
+        // A signal is worth only what can be BOUGHT of it. If the depth that sits at our limit is there because the
+        // game is turning against us (and the ask jumps past us when it turns our way), the edge lives in what
+        // nobody could buy - adverse selection - and every line that pools the two hides it. The radar's ADVERSE
+        // SEL asks this of tennis FILLS; a shadow sport has no fills, so this asks it of SIGNALS, per sport.
+        // Added 2026-10-22, when a per-EPISODE first-row cut made shadow basketball look exactly like that (13 vs
+        // 16.2 expected buyable, 26 vs 19.7 not). Graded the way the live path buys - once per side, at the first
+        // signal the book would fill - the same data read 15 vs 14.2 deep and 5 vs 3.5 never-buyable: no such
+        // split. The per-episode cut misfiled sides that became buyable on a later signal. Keep using this one.
+        Console.WriteLine();
+        int takeCtr = (int)Env("EV_TAKEABLE_CTR", 15);
+        Console.WriteLine($"4f. TAKEABLE OR NOT  (settled signals by depth at our limit; deep = >= {takeCtr} contracts, "
+                        + "about one order)");
+        var sides = TakeableSides(all.Where(o => !retired.Contains(Sport(o.Ticker))), takeCtr);
+        if (sides.Count == 0)
+            Console.WriteLine("   (no settled signal carries a depth reading yet)");
+        foreach (var sport in sides.GroupBy(x => Sport(x.O.Ticker)).OrderByDescending(g => g.Count()))
+            foreach (var (cls, label) in new[] { ("deep", $"deep (>= {takeCtr} at our limit)"),
+                                                 ("thin", $"thin (1-{takeCtr - 1})"),
+                                                 ("none", "none (ask above our limit)") })
+            {
+                var l = sport.Where(x => x.Cls == cls).Select(x => x.O).ToList();
+                if (l.Count == 0) continue;
+                int n = l.Count, wins = l.Count(o => o.Won!.Value);
+                double exp = l.Sum(o => o.PUsed), sdW = Math.Sqrt(l.Sum(o => o.PUsed * (1 - o.PUsed)));
+                var pl = l.Select(o => (o.Won!.Value ? 1.0 : 0.0) - o.Cost).ToList();
+                double mean = pl.Average();
+                double sd = n > 1 ? Math.Sqrt(pl.Sum(x => Math.Pow(x - mean, 2)) / (n - 1)) : 0;
+                Console.WriteLine($"   {sport.Key,-11} {label,-27} n={n,4}  won {wins,4} vs {exp,6:0.0} expected "
+                                + $"({(sdW > 0 ? (wins - exp) / sdW : 0):+0.0;-0.0} SD)  edge/ctr {mean:+0.0000;-0.0000}  "
+                                + $"t={(sd > 0 ? mean / (sd / Math.Sqrt(n)) : 0):+0.00;-0.00}");
+            }
+        Console.WriteLine("   DEEP is the strategy: it is what an order would have filled. DEEP under expectation while NONE");
+        Console.WriteLine("   is over it is adverse selection - the edge sits in what nobody could buy. Read it per sport.");
 
 
         // ── 6. WHEN WILL WE KNOW? ─────────────────────────────────────────────────────────────────────

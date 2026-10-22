@@ -883,6 +883,34 @@ public static class SelfTest
             finally { Environment.SetEnvironmentVariable("EV_LIVE_SPORTS", savedLive); }
         }
 
+        // -- REPORT 4f: TAKEABLE OR NOT (2026-10-22) ------------------------------------------------
+        // One entry per settled, signalled ticker+side, by the best depth any of its signals showed, graded at the
+        // signal the live path would have bought at - so a side that only became buyable on a later signal must
+        // count as takeable, at THAT signal, and nothing unsettled, depth-less or non-signal may slip in.
+        {
+            var t0 = new DateTime(2026, 10, 22, 12, 0, 0, DateTimeKind.Utc);
+            Obs O(string tk, string side, int s, double depth, bool sig = true, bool? won = true, double p = 0.5)
+                => new(tk, side, t0.AddSeconds(s), p, p, p, 0.45, 0.47, 0.03, 10, true, 50, sig, won, 1, "", sig ? "SIGNAL" : "REJECTED_REST",
+                       WsDepth: depth);
+            var got = Calibration.TakeableSides(new[]
+            {
+                O("A", "YES", 0, -1), O("A", "YES", 30, 20, p: 0.6),      // unbuyable first, deep later
+                O("B", "YES", 0, 5, p: 0.55), O("B", "YES", 30, -1),      // thin at best
+                O("C", "NO", 0, -1, p: 0.4), O("C", "NO", 30, -1),        // never buyable
+                O("D", "YES", 0, double.NaN),                             // predates the column
+                O("E", "YES", 0, 50, won: null),                          // not settled
+                O("F", "YES", 0, 50, sig: false),                         // not a signal
+                O("G", "YES", 0, 15),                                     // exactly the threshold
+            }, 15).ToDictionary(x => x.O.Ticker);
+            Check(got.Count == 4 && !got.ContainsKey("D") && !got.ContainsKey("E") && !got.ContainsKey("F"),
+                  "4f: only settled signals with a depth reading count", string.Join(",", got.Keys));
+            Check(got["A"].Cls == "deep" && got["A"].O.PUsed == 0.6,
+                  "4f: a side that became buyable on a LATER signal is takeable, graded at that signal");
+            Check(got["B"].Cls == "thin" && got["B"].O.PUsed == 0.55, "4f: best depth 1..14 is thin, graded where it showed");
+            Check(got["C"].Cls == "none" && got["C"].O.At == t0, "4f: never buyable is none, graded at the first signal");
+            Check(got["G"].Cls == "deep", "4f: depth exactly at the threshold is deep");
+        }
+
         // -- THE KINETIC FILTER --------------------------------------------------------------------
         // The guard's value rests entirely on TryRise refusing to answer when it cannot: a window it has no
         // samples for must NOT read as "flat", or a market we just started watching passes a filter that has

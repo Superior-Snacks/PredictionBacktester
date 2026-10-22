@@ -92,7 +92,15 @@ _TEAM_ALIASES = {"a s": "athletics", "as": "athletics", "oakland": "athletics", 
                  "cruzeiro basquete": "cruzeiro",                  # Cruzeiro
                  "basquete osasco": "osasco",                      # Basket Osasco
                  "zenit saint petersburg": "zenit",                # Zenit St Petersburg
-                 "bc lokomotiv kuban": "lokomotiv kuban"}          # Lokomotiv Kuban
+                 "bc lokomotiv kuban": "lokomotiv kuban",          # Lokomotiv Kuban
+                 # 2026-10-22 - names the basketball affix strip below cannot reach (guest matchups, same day):
+                 "kk crvena zvezda belgrade": "crvena zvezda",     # Crvena Zvezda
+                 "ao mykonoy": "mykonos",                          # AO Mykonos
+                 "bc olympiakos piraeus": "olympiakos",            # Olympiakos BC
+                 "alliance sport alsace": "alsace",                # AS Alsace Gries-Souffel
+                 "hermine nantes basket": "nantes",                # Nantes Atlantique
+                 "rouen metropole basket": "rouen",                # Rouen
+                 "bc uniks kazan": "unics kazan"}                  # UNICS Kazan
 
 
 def _canon(key: str) -> str:
@@ -126,9 +134,35 @@ _NFL_CITY = {
 _TWO_WAY_ONLY = {s for k in ("icehockey", "basketball") for s in sports_cfg.CATALOG[k].moneyline}
 
 
+# Basketball (2026-10-22): Kalshi writes the club FORM ("BC AEK Athens", "Hapoel Holon BC", "SC Corinthians
+# Paulista", "Stade Rochelais Basket", "Poitiers Basket 86", "Dubai Basketball") where Pinnacle writes the club
+# ("AEK Athens", "Hapoel Holon", "Corinthians Paulista", "Stade Rochelais", "Poitiers", "BC Dubai"). On one day's
+# board that was half of the listed-but-unpaired basketball games. These affixes come off the KALSHI side only,
+# after the aliases (which win), and the core must still be CONTAINED in Pinnacle's name - for both teams of one
+# game, in the league-filtered, sport-anchored catalog, at the ticker's start, then through the price gate.
+_BB_SERIES = set(sports_cfg.CATALOG["basketball"].moneyline)
+_BB_PREFIX = {"bc", "kk", "sc", "ao", "ja", "alm", "bk", "cb", "pbc"}
+_BB_SUFFIX = {"bc", "basket", "basketball", "basquete", "club"}
+
+
+def _bb_core(key: str) -> str:
+    """'bc aek athens' -> 'aek athens', 'poitiers basket 86' -> 'poitiers'. Never strips to nothing."""
+    w = key.split()
+    while len(w) > 1 and w[0] in _BB_PREFIX:
+        w = w[1:]
+    while len(w) > 1 and (w[-1] in _BB_SUFFIX or w[-1].isdigit()):
+        w = w[:-1]
+    return " ".join(w)
+
+
 def _canon_team(key: str, ticker: str) -> str:
-    """_canon, plus the KXNFLGAME-only "<code> <nickname>" -> "<city> <nickname>" expansion above."""
-    if (ticker or "").split("-")[0].upper() == "KXNFLGAME":
+    """_canon, plus the KXNFLGAME-only "<code> <nickname>" -> "<city> <nickname>" expansion and the basketball
+    club-affix strip above. Used for the YES outcome too, so it always lands on the same form as its team."""
+    series = (ticker or "").split("-")[0].upper()
+    if series in _BB_SERIES:
+        aliased = _canon(key)
+        return aliased if aliased != key else _bb_core(key)
+    if series == "KXNFLGAME":
         code, _, nick = key.partition(" ")
         city = _NFL_CITY.get(code)
         if city and nick:
@@ -405,7 +439,7 @@ def main() -> None:
             continue
         yes_outcome, teams, is_tie = key
         teams = frozenset(_canon_team(t, tk) for t in teams)   # fold Kalshi team abbreviations (A's → athletics; NFL codes → city)
-        yes_outcome = _canon(yes_outcome)
+        yes_outcome = _canon_team(yes_outcome, tk)   # same form as its team (was _canon: aliases only)
         expected = set() if args.no_league_anchor else _expected_sports(tk)   # league anchor by series
 
         # MATCH: exact team-set first (rare — Kalshi city ≠ Pinnacle full name), then the bipartite matcher.
