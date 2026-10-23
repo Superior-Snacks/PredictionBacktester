@@ -506,6 +506,18 @@ class PinnacleAdapter(BookAdapter):
         self._live_meta: dict = {}
         # ── WS state ──
         self._client = None
+        # In-place socket rebuilds (see _rebuild_ws_client): how many, when last, and the one armed by a mid-window
+        # session rotation that is waiting for the page's new WS login to arrive.
+        self._ws_rebuilds = 0
+        self._last_ws_rebuild = 0.0
+        self._ws_rebuild_min_gap = float(os.environ.get("PINNACLE_WS_REBUILD_MIN_GAP_SEC", "60"))
+        # HARD CEILING, whatever asks: a rebuild is a new connection + a full re-subscribe pass, so even a
+        # pathological trigger (a login that flaps) cannot exceed this many an hour. Normal operation needs ~0:
+        # a rotation is a re-login (2 in a 2.5-day run) and the watchdog stops after 2 cycles anyway.
+        self._ws_rebuild_max_per_hour = int(os.environ.get("PINNACLE_WS_REBUILD_MAX_PER_HOUR", "4"))
+        self._ws_rebuild_times: list = []
+        self._ws_rebuild_cap_noted = False
+        self._rebuild_after_rotation = False
         self._connected = False
         self._ws_started = False                          # LAZY: WS connects only on the first /odds w/ a league
         self._ws_gave_up = False                          # SESSION-DEATH latch → stop retrying a DEAD session
@@ -1484,6 +1496,14 @@ class PinnacleAdapter(BookAdapter):
                 self._ws_gave_up = False
                 self._ws_started = False                  # next odds() relands _start_ws() with the new creds
                 self._seeded.clear()                      # re-seed pre-match snapshots under the new session
+            elif rotated and self._client is not None and self._ws_started:
+                # A RUNNING socket outlives the login that opened it: rebuild it on the new one (2026-10-23, see
+                # _rebuild_ws_client). Armed here; fired once the page's new WS login is in hand - often this
+                # same call, otherwise the next capture.
+                self._rebuild_after_rotation = True
+        if self._rebuild_after_rotation and ws_pass_changed and not self._ws_gave_up:
+            if self._rebuild_ws_client("session rotated - the old socket's login is no longer served"):
+                self._rebuild_after_rotation = False
         # A re-captured SUFFIX changes the WS password WITHOUT changing the x-session (so neither became_ready nor
         # rotated fires) — but a given-up odds WS must still restart with it, since a stale suffix is a top cause
         # of the CONNACK auth-reject. Restart on any fresh WS creds after a give-up.
@@ -1567,31 +1587,10 @@ class PinnacleAdapter(BookAdapter):
         if not self._ws_user or not self._ws_pass:
             print("[PINNACLE WS] WARNING: PINNACLE_WS_USERNAME / PINNACLE_WS_PASSWORD not set — set from the WS "
                   "CONNECT frame (username = account id, password = '{x-session}|{suffix}').")
-        cid = "sub-" + "".join(random.choices(
-            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", k=16))
-        try:
-            self._client = mqtt.Client(client_id=cid, transport="websockets",
-                                       callback_api_version=mqtt.CallbackAPIVersion.VERSION1)
-        except (TypeError, AttributeError):
-            self._client = mqtt.Client(client_id=cid, transport="websockets")   # paho < 2.0
-        self._client.username_pw_set(self._ws_user, self._ws_pass)
-        # The real browser's WS upgrade carries ONLY Origin + User-Agent (NO x-api-key, NO cookies — auth is
-        # entirely in the MQTT CONNECT username/password). Match it exactly to avoid a needless fingerprint diff.
-        self._client.ws_set_options(path=WS_PATH, headers={
-            "Origin": "https://www.pinnacle.bet", "User-Agent": USER_AGENT})
-        try:
-            self._client.tls_set()                       # wss
-        except Exception:
-            pass
-        self._client.reconnect_delay_set(min_delay=1, max_delay=60)
-        self._client.on_connect = self._on_connect
-        self._client.on_disconnect = self._on_disconnect
-        self._client.on_message = self._on_message
-        self._client.on_subscribe = self._on_subscribe
+        self._client = self._make_client(mqtt)
         try:
             self._loop = asyncio.get_running_loop()       # so paho's off-loop callbacks can schedule a re-mint
-            self._client.connect_async(WS_HOST, 443, keepalive=60)
-            self._client.loop_start()                    # background network thread
+            self._connect_client(self._client)
             self._ws_watchdog_task = asyncio.create_task(self._ws_watchdog())     # WS health monitor (no give-up)
             self._reconciler_task = asyncio.create_task(self._sub_reconciler())   # staggered subscribes
             self._status_task = asyncio.create_task(self._status_ping())          # browser-like liveness ping
@@ -1600,6 +1599,93 @@ class PinnacleAdapter(BookAdapter):
                   "id = '<leagueId>:<matchupId>:<designation>'.")
         except Exception as ex:
             print(f"[PINNACLE WS] connect error: {ex}")
+
+    def _make_client(self, mqtt=None):
+        """A NEW paho client - new random client id - carrying the credentials captured MOST RECENTLY, our
+        callbacks and the browser's WS options. Not connected (see _connect_client)."""
+        if mqtt is None:
+            import paho.mqtt.client as mqtt
+        cid = "sub-" + "".join(random.choices(
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", k=16))
+        try:
+            cl = mqtt.Client(client_id=cid, transport="websockets",
+                             callback_api_version=mqtt.CallbackAPIVersion.VERSION1)
+        except (TypeError, AttributeError):
+            cl = mqtt.Client(client_id=cid, transport="websockets")   # paho < 2.0
+        cl.username_pw_set(self._ws_user, self._ws_pass)
+        # The real browser's WS upgrade carries ONLY Origin + User-Agent (NO x-api-key, NO cookies — auth is
+        # entirely in the MQTT CONNECT username/password). Match it exactly to avoid a needless fingerprint diff.
+        cl.ws_set_options(path=WS_PATH, headers={"Origin": "https://www.pinnacle.bet", "User-Agent": USER_AGENT})
+        try:
+            cl.tls_set()                                 # wss
+        except Exception:
+            pass
+        cl.reconnect_delay_set(min_delay=1, max_delay=60)
+        cl.on_connect = self._on_connect
+        cl.on_disconnect = self._on_disconnect
+        cl.on_message = self._on_message
+        cl.on_subscribe = self._on_subscribe
+        return cl
+
+    def _connect_client(self, cl) -> None:
+        cl.connect_async(WS_HOST, 443, keepalive=60)
+        cl.loop_start()                                   # background network thread
+
+    def _rebuild_ws_client(self, why: str) -> bool:
+        """Swap the odds socket for a NEW client (new client id, the latest captured WS login) without touching the
+        feed loops - watchdog, reconciler, keepalive and ping all read self._client afresh, and the new socket's
+        on_connect resets the per-socket state (subscriptions, SUBACK counts, silence baseline) like any connect.
+
+        WHY NOT client.reconnect(). 2026-10-23 09:09 Pinnacle logged the session out; the auto re-login minted a
+        new x-session at 09:10 and the page's new WS login was captured and pushed onto the live client. The
+        broker then stopped serving that client: silence from 09:10, every re-subscribe REFUSED (SUBACK 128), and
+        the watchdog's forced reconnect - same client, same client id - refused all over again. Nothing recovered
+        until the give-up at 09:27 had stood the socket down and the next captured login built a NEW client at
+        09:30: twenty minutes of an open window with no in-play prices. A fresh client with the fresh login is
+        the remedy that worked, so it is what both triggers now use (a mid-window session rotation, see
+        _on_browser_creds, and the watchdog's forced reconnect). Rate-limited; False when skipped or it failed."""
+        if not self._dedicated_ws or self._ws_gave_up or self._client is None:
+            return False
+        now = time.time()
+        if now - self._last_ws_rebuild < self._ws_rebuild_min_gap:
+            return False
+        self._ws_rebuild_times = [t for t in self._ws_rebuild_times if now - t < 3600]
+        if len(self._ws_rebuild_times) >= self._ws_rebuild_max_per_hour:
+            if not self._ws_rebuild_cap_noted:
+                self._ws_rebuild_cap_noted = True
+                print(f"[PINNACLE WS] socket rebuild SKIPPED ({why}) - {len(self._ws_rebuild_times)} in the last hour "
+                      f"(PINNACLE_WS_REBUILD_MAX_PER_HOUR={self._ws_rebuild_max_per_hour}). The watchdog's give-up "
+                      f"and backoff carry on as before.", flush=True)
+            return False
+        self._ws_rebuild_cap_noted = False
+        self._last_ws_rebuild = now
+        self._ws_rebuild_times.append(now)
+        old = self._client
+        for cb in ("on_connect", "on_disconnect", "on_message", "on_subscribe"):
+            try:
+                setattr(old, cb, None)                    # the old socket's hang-up must not touch our state
+            except Exception:
+                pass
+
+        def _hard_stop(cl=old):                           # neither call may run inside the paho loop thread
+            try: cl.disconnect()
+            except Exception: pass
+            try: cl.loop_stop()
+            except Exception: pass
+        threading.Thread(target=_hard_stop, daemon=True).start()
+        self._connected = False
+        self._subscribed.clear()
+        self._sub_mids.clear()
+        try:
+            self._client = self._make_client()
+            self._connect_client(self._client)
+        except Exception as ex:
+            print(f"[PINNACLE WS] socket rebuild failed ({why}): {type(ex).__name__}: {ex}", flush=True)
+            return False
+        self._ws_rebuilds += 1
+        print(f"[PINNACLE WS] rebuilt the odds socket ({why}) - new client, the latest WS login "
+              f"(rebuild #{self._ws_rebuilds}).", flush=True)
+        return True
 
     def _active_league_ids(self) -> list:
         """Leagues the C# bot has asked about within PINNACLE_ACTIVE_LEAGUE_TTL_SEC - and PRUNE the rest.
@@ -1908,10 +1994,14 @@ class PinnacleAdapter(BookAdapter):
                         self._ws_last_msg_ts = now      # restart the clock so this cannot loop every 5s
                         self._sub_pass_done_ts = 0.0    # fresh socket: let the next completed pass re-base
                         self._pass_after_drop = False
-                        try:
-                            self._client.reconnect()    # on_connect clears _subscribed -> reconciler refills
-                        except Exception as ex:
-                            print(f"[PINNACLE WS] forced reconnect failed: {type(ex).__name__}: {ex}", flush=True)
+                        # A NEW client on the latest login, not reconnect() on the old one: on 2026-10-23 the
+                        # same-client reconnect was refused topic by topic (see _rebuild_ws_client). reconnect()
+                        # stays as the fallback when a rebuild is rate-limited or fails.
+                        if not self._rebuild_ws_client(f"silent {quiet:.0f}s, forced reconnect"):
+                            try:
+                                self._client.reconnect()    # on_connect clears _subscribed -> reconciler refills
+                            except Exception as ex:
+                                print(f"[PINNACLE WS] forced reconnect failed: {type(ex).__name__}: {ex}", flush=True)
                     elif now - last_resub > silence_resub:
                         last_resub = now
                         n = len(self._subscribed)

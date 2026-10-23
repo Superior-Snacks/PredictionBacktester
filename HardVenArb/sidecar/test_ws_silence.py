@@ -93,6 +93,9 @@ def make_adapter(clock: Clock, n_leagues: int) -> tuple[PinnacleAdapter, FakeCli
     a._session_expired = False
     c = FakeClient(a)
     a._client = c
+    # A socket REBUILD (forced reconnect / session rotation) builds a new client: here the same fake, "connected".
+    a._make_client = lambda mqtt=None: c
+    a._connect_client = lambda cl: a._on_connect(cl, None, None, 0)
     for i in range(n_leagues):
         a._active_leagues[str(1000 + i)] = clock.now
     return a, c
@@ -149,8 +152,8 @@ async def main() -> int:
     pass_len = 94 * a._subscribe_gap_sec           # 282s
     await run_watchdog_for(a, clock, pass_len + 20)
     results.append(check("no reconnect during an on-schedule pass (old code: at 235s)",
-                         c.reconnects == 0 and len(a._subscribed) == 94,
-                         f"reconnects={c.reconnects} subscribed={len(a._subscribed)}"))
+                         c.reconnects == 0 and a._ws_rebuilds == 0 and len(a._subscribed) == 94,
+                         f"reconnects={c.reconnects} rebuilds={a._ws_rebuilds} subscribed={len(a._subscribed)}"))
 
     # ── 3: keep it dead -> two cycles -> backoff ───────────────────────────────────────────────────
     subs_before = c.subs
@@ -162,8 +165,10 @@ async def main() -> int:
     await run_watchdog_for(a, clock, 3600)
     await REAL_SLEEP(0.3)                          # the hard-stop runs on a helper thread
     results.append(check("dead feed gives up after 2 reconnect cycles",
-                         a._ws_gave_up and not a._connected and c.reconnects == 1,
-                         f"gave_up={a._ws_gave_up} connected={a._connected} reconnects={c.reconnects}"))
+                         a._ws_gave_up and not a._connected and a._ws_rebuilds == 1,
+                         f"gave_up={a._ws_gave_up} connected={a._connected} rebuilds={a._ws_rebuilds}"))
+    results.append(check("the forced reconnect REBUILDS the client (2026-10-23: a same-client reconnect was refused)",
+                         a._ws_rebuilds == 1 and c.reconnects == 0, f"rebuilds={a._ws_rebuilds} reconnects={c.reconnects}"))
     results.append(check("socket actually stood down (disconnect + loop_stop)",
                          c.disconnects >= 1 and c.loop_stops >= 1))
     results.append(check("backoff armed at 15 min, retry scheduled",
@@ -235,8 +240,53 @@ async def main() -> int:
     a6._on_connect(c6, None, None, 0)
     await run_watchdog_for(a6, clock, 1800)
     results.append(check("healthy feed: no drops, no reconnects, not suspect",
-                         c6.reconnects == 0 and not a6._silence_suspect and not a6._ws_gave_up
-                         and len(a6._subscribed) == 20))
+                         c6.reconnects == 0 and a6._ws_rebuilds == 0 and not a6._silence_suspect
+                         and not a6._ws_gave_up and len(a6._subscribed) == 20))
+
+    # ── 10: a MID-WINDOW session rotation rebuilds the socket on the new login (2026-10-23) ─────────────
+    async def _no_validate():
+        return None
+
+    a7, c7 = make_adapter(clock, 3)
+    built = []
+
+    def _fresh(mqtt=None):
+        built.append(a7._ws_pass)
+        return FakeClient(a7)
+    a7._make_client = _fresh
+    a7._validate_capture = _no_validate
+    a7._ws_started, a7._session, a7._ws_user, a7._ws_pass = True, "S-OLD", "u", "S-OLD|aaaa"
+    a7._last_ws_rebuild = clock.now - 3600
+    a7._on_browser_creds({"session": "S-NEW", "ready": True})           # the re-login: x-session rotates first
+    results.append(check("a rotation ARMS a rebuild while the new WS login is not in hand yet",
+                         a7._rebuild_after_rotation and a7._ws_rebuilds == 0 and not built))
+    a7._on_browser_creds({"session": "S-NEW", "ws_user": "u", "ws_pass": "S-NEW|bbbb", "ready": True})
+    await REAL_SLEEP(0.2)                                                # the old client's hard stop is threaded
+    results.append(check("...and fires on it: a NEW client built with the NEW login, the old one hung up",
+                         a7._ws_rebuilds == 1 and built == ["S-NEW|bbbb"] and not a7._rebuild_after_rotation
+                         and c7.disconnects >= 1 and c7.loop_stops >= 1 and a7._client is not c7,
+                         f"rebuilds={a7._ws_rebuilds} built={built} disconnects={c7.disconnects}"))
+    a7._last_ws_rebuild = clock.now - 3600
+    a7._on_browser_creds({"session": "S-NEW", "ws_user": "u", "ws_pass": "S-NEW|cccc", "ready": True})
+    results.append(check("a routine re-captured suffix (no rotation) does NOT rebuild",
+                         a7._ws_rebuilds == 1, f"rebuilds={a7._ws_rebuilds}"))
+    results.append(check("rebuilds are rate-limited (one per PINNACLE_WS_REBUILD_MIN_GAP_SEC)",
+                         a7._rebuild_ws_client("t1") and not a7._rebuild_ws_client("t2") and a7._ws_rebuilds == 2))
+    a9, _ = make_adapter(clock, 3)
+    made = []
+    a9._make_client = lambda mqtt=None: made.append(1) or FakeClient(a9)
+    a9._ws_rebuild_min_gap = 0.0
+    tries = [a9._rebuild_ws_client(f"flap {i}") for i in range(10)]   # a login that flaps: asks again and again
+    results.append(check("however often it is asked, at most 4 rebuilds an hour (PINNACLE_WS_REBUILD_MAX_PER_HOUR)",
+                         sum(tries) == 4 and len(made) == 4 and a9._ws_rebuilds == 4, f"{sum(tries)} rebuilt"))
+    clock.now += 3601
+    results.append(check("...and the hour rolls off", a9._rebuild_ws_client("next hour") and a9._ws_rebuilds == 5))
+    a8, c8 = make_adapter(clock, 3)
+    a8._validate_capture = _no_validate
+    a8._ws_started, a8._ws_gave_up, a8._session, a8._ws_pass = True, True, "S-OLD", "S-OLD|aaaa"
+    a8._on_browser_creds({"session": "S-NEW", "ws_user": "u", "ws_pass": "S-NEW|bbbb", "ready": True})
+    results.append(check("a rotation after a GIVE-UP takes the restart path, not a rebuild",
+                         a8._ws_rebuilds == 0 and not a8._ws_gave_up and not a8._ws_started))
 
     time.time = REAL_TIME
     asyncio.sleep = REAL_SLEEP
