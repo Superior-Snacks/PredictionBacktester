@@ -2844,7 +2844,15 @@ public static class Calibration
         DepthToxicity(Directory.GetCurrentDirectory(), settled, livePrefix, obs, followPrefix);
         StakeScaling(sigOnly, Directory.GetCurrentDirectory());
         ConvergenceReport(Directory.GetCurrentDirectory(), followPrefix, livePrefix, all);
-        CooldownShadow(Directory.GetCurrentDirectory(), followPrefix, settled, all);
+        // Only the live (tennis) pipeline writes the recheck-cooldown skip log. A shadow or derivative report read
+        // that same EvCooldownSkip_*.csv and printed tennis's skips as its own, graded against ITS follow-ups.
+        if (followPrefix == "EvFollowUp")
+            CooldownShadow(Directory.GetCurrentDirectory(), followPrefix, settled, all);
+        else
+        {
+            Console.WriteLine();
+            Console.WriteLine("10. COOLDOWN SHADOW  - not recorded for this pipeline (only the live tennis pipeline logs cooldown skips)");
+        }
         // THE RADAR IS LAST, ALWAYS. It is the health check; anything printed after it would be the
         // thing the eye lands on instead. New sections go ABOVE this line.
         RollingRadar(Directory.GetCurrentDirectory(), followPrefix, livePrefix, settled);

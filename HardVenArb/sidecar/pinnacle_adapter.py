@@ -728,6 +728,11 @@ class PinnacleAdapter(BookAdapter):
         self._sub_mids: dict = {}         # mid -> (leagueId, topic) awaiting its SUBACK
         self._suback_ok = 0
         self._suback_refused = 0
+        # Leagues REFUSED since the last granted SUBACK. A run of them across leagues means the broker is refusing
+        # the SOCKET, not a league - see _on_subscribe. 0 turns the early rebuild off.
+        self._refused_streak: set = set()
+        self._refusal_rebuild_asked = False
+        self._refusal_rebuild_leagues = int(os.environ.get("PINNACLE_WS_REFUSED_REBUILD_LEAGUES", "2"))
         # Leagues the C# bot has stopped asking about fall out of the active set after this long. Before,
         # `_active_leagues` was never pruned: one four-day process grew from 25 to 123 leagues per keepalive
         # pass (6 -> 27 authed GETs a minute) on tournaments that had finished days earlier.
@@ -1105,7 +1110,7 @@ class PinnacleAdapter(BookAdapter):
                     await self._reseed_league(lid)        # reader mode: seed from PINNACLE_RESEED_SOURCE (authed
                 else:                                     # by default → real prices); loop then keeps it fresh
                     await self._refresh_league(lid)
-            if not self._ws_started and self._active_leagues:
+            if not self._ws_started and self._active_leagues and not self._ws_dial_held():
                 self._start_ws()                          # LAZY connect (the reconciler subscribes leagues gradually)
         return self._read_cache(selection_ids, now)
 
@@ -1542,6 +1547,15 @@ class PinnacleAdapter(BookAdapter):
         self._ws_auth_rejects = self._rest_auth_fails = 0
         self._ws_auth_total = 0                             # ...including the absolute auth ceiling
         self._seeded.clear()
+        # A NEW WINDOW IS A NEW, UNPROVEN CAPTURE. stop() keeps the creds and nothing cleared the proof, so a
+        # later window inherited the previous window's "validated" while the reopened profile replayed a session
+        # that had died in the dark - authed REST and the socket dial both trusted it. The probe re-proves a live
+        # session within seconds of the capture.
+        self._session_proven = False
+        try:
+            self._proven_evt.clear()
+        except Exception:
+            pass
         # A new window is a new attempt: the silence backoff does not carry over, and a pending retry from
         # the last window must not fire into this one on its own clock.
         self._silence_cycles = 0
@@ -1642,8 +1656,9 @@ class PinnacleAdapter(BookAdapter):
         the watchdog's forced reconnect - same client, same client id - refused all over again. Nothing recovered
         until the give-up at 09:27 had stood the socket down and the next captured login built a NEW client at
         09:30: twenty minutes of an open window with no in-play prices. A fresh client with the fresh login is
-        the remedy that worked, so it is what both triggers now use (a mid-window session rotation, see
-        _on_browser_creds, and the watchdog's forced reconnect). Rate-limited; False when skipped or it failed."""
+        the remedy that worked, so it is what every trigger now uses (a mid-window session rotation, see
+        _on_browser_creds; a socket whose subscriptions are all refused, see _on_subscribe; and the watchdog's
+        forced reconnect). Rate-limited; False when skipped or it failed."""
         if not self._dedicated_ws or self._ws_gave_up or self._client is None:
             return False
         now = time.time()
@@ -1676,6 +1691,8 @@ class PinnacleAdapter(BookAdapter):
         self._connected = False
         self._subscribed.clear()
         self._sub_mids.clear()
+        self._refused_streak.clear()                      # the new socket is judged on its own SUBACKs
+        self._refusal_rebuild_asked = False
         try:
             self._client = self._make_client()
             self._connect_client(self._client)
@@ -1746,8 +1763,43 @@ class PinnacleAdapter(BookAdapter):
                 print(f"[PINNACLE WS] *** SUBACK REFUSED {topic} (league {lid}, codes {codes}) - the broker accepted "
                       f"the connection but not this subscription ({self._suback_refused} refused / "
                       f"{self._suback_ok} granted on this socket). ***", flush=True)
+            # A REFUSED SOCKET IS REBUILT AT ONCE, NOT AFTER THE SILENCE LADDER. 2026-10-24 07:28: an rc=7 drop
+            # right after a re-mint reload, paho's same-client reconnect accepted, then every SUBSCRIBE refused -
+            # 456 of them over the watchdog's 180/360/475s ladder, ten minutes with no prices, until its forced
+            # reconnect built a NEW client that was served at once (as on 10-23 09:13). The refusals say so within
+            # two leagues; waiting adds nothing but refused requests. The pass pauses (_sub_reconciler) so a
+            # rate-limited rebuild does not turn into the same stream of refusals.
+            self._refused_streak.add(lid)
+            if self._socket_refusing() and not self._refusal_rebuild_asked:
+                self._refusal_rebuild_asked = True
+                print(f"[PINNACLE WS] *** {len(self._refused_streak)} league(s) in a row REFUSED, none granted - the "
+                      f"broker is refusing this socket, not a league. Pausing the subscribe pass and rebuilding "
+                      f"the socket now instead of waiting out the silence watchdog. ***", flush=True)
+                self._ask_refusal_rebuild()
         else:
             self._suback_ok += 1
+            self._refused_streak.clear()
+            self._refusal_rebuild_asked = False
+
+    def _socket_refusing(self) -> bool:
+        """True once PINNACLE_WS_REFUSED_REBUILD_LEAGUES (2) leagues have come back refused with nothing granted
+        since - more than one league, so a single closed or restricted league can never trigger it."""
+        n = self._refusal_rebuild_leagues
+        return n > 0 and len(self._refused_streak) >= n
+
+    def _ask_refusal_rebuild(self) -> None:
+        """Rebuild from the event loop: SUBACKs arrive on paho's network thread, and the rebuild swaps the client
+        that the loop's reconciler, watchdog and keepalive read. Bounded by _rebuild_ws_client's own gap and
+        hourly cap; when those skip it, the pass stays paused and the watchdog's forced reconnect tries later."""
+        why = f"{len(self._refused_streak)} leagues refused in a row"
+        loop = self._loop
+        if loop is not None and loop.is_running():
+            try:
+                loop.call_soon_threadsafe(self._rebuild_ws_client, why)
+                return
+            except Exception:
+                pass
+        self._rebuild_ws_client(why)
 
     def _on_connect(self, client, userdata, flags, rc, *a) -> None:
         # A HARD STOP MUST BE HARD. This callback had no give-up guard, and _give_up_ws early-returns once the
@@ -1780,6 +1832,8 @@ class PinnacleAdapter(BookAdapter):
             self._sub_pass_noted = False
             self._sub_mids.clear()
             self._suback_ok = self._suback_refused = 0
+            self._refused_streak.clear()
+            self._refusal_rebuild_asked = False
         elif rc_val in (4, 5):                            # CONNACK 4=bad user/pass, 5=not authorized
             self._ws_auth_rejects += 1
             self._ws_auth_total += 1
@@ -2145,8 +2199,8 @@ class PinnacleAdapter(BookAdapter):
                 await asyncio.sleep(self._subscribe_gap_sec)
             except asyncio.CancelledError:
                 break
-            if not self._connected:
-                continue
+            if not self._connected or self._socket_refusing():
+                continue                                  # a refusing socket gets no more SUBSCRIBEs (_on_subscribe)
             pending = [l for l in self._active_league_ids() if l not in self._subscribed]
             if pending:
                 self._subscribe_league(pending[0])        # one per tick = staggered, organic-looking
@@ -3143,6 +3197,25 @@ class PinnacleAdapter(BookAdapter):
             print(f"[PINNACLE] authed REST HELD ({why}) - the session is captured but has not proven itself "
                   f"with a live call yet. Waiting for validation rather than firing into a guest redirect; "
                   f"this unblocks itself the moment the probe succeeds.", flush=True)
+        return True
+
+    def _ws_dial_held(self) -> bool:
+        """True while the odds socket must not be dialled yet - the WS twin of `_authed_rest_blocked`.
+
+        The MQTT password is `{x-session}|{suffix}`, so the socket carries the same unproven capture authed REST
+        waits out, and a replayed dead x-session costs a REJECTED login instead of a guest redirect. Observed
+        2026-10-23 14:49: window open, the profile replays a 340-min-old session, and the socket dials it four
+        times (rc=5) while the probe and the re-login run. Rejected logins are the worst traffic to emit at a
+        sportsbook; waiting the few seconds the probe takes removes them. Only the FIRST dial of a window
+        waits - a running client reconnects on its own."""
+        if self._session_source != "browser" or self._session_proven:
+            self._ws_hold_logged = False
+            return False
+        if not getattr(self, "_ws_hold_logged", False):
+            self._ws_hold_logged = True
+            print("[PINNACLE WS] socket HELD until the captured login validates - dialling an unproven login is "
+                  "a rejected MQTT login whenever the profile replayed a dead session. Connects on the first "
+                  "/odds after the probe succeeds.", flush=True)
         return True
 
     async def _league_pass(self, leagues: list, fetch, label: str, stop_on_giveup: bool = False):

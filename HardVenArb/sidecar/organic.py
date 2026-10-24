@@ -93,13 +93,15 @@ class OrganicActivity:
     def __init__(self, page, browse_urls: list[str] | None = None,
                  min_gap: float = 20.0, max_gap: float = 150.0,
                  long_gap_chance: float = 0.10, long_gap_max: float = 240.0,   # cap the "stepped away" gap at 4m
-                 trim_fn=None):
+                 trim_fn=None, home_fn=None):
                  # ↑ keepalive-critical: the ~30-min idle logout means an interaction must land well inside 30m.
                  # A 15-min long gap (old default 900) could time it out on its own → capped to 4m.
         self._page = page
         self._urls = list(browse_urls or [])
         self._trim_fn = trim_fn          # async(page, source) -> clears the board's side betslip if a Remove-all
                                          # button is present (safe: only PENDING cards). None = off.
+        self._home_fn = home_fn          # () -> the board's home URL (where the drift watchdog returns it). None = off.
+        self._navclick_off_noted = False
         # sport slugs parsed from the browse URLs (…/en/<sport>/…) → click the sport nav to flip between them
         # (a real soft-navigation, and a genuine CLICK — the interaction Pinnacle's ~30-min idle logout counts).
         self._sports: list[tuple[str, str]] = []
@@ -269,6 +271,38 @@ class OrganicActivity:
             slug, label = self._sports[0]        # stay put: re-click the current sport's own nav row
         return slug if await self._nav_click(slug, label) else None
 
+    def _navclick_leaves_home(self) -> bool:
+        """True when re-clicking the sport's nav row would take the board OFF its home page.
+
+        The row links to the sport's pre-match list (`/en/tennis/matchups/`), which was the home when this click
+        was chosen (2026-08-06). Home has since become the LIVE list (`/en/tennis/matchups/live/`), so every click
+        left home and the session's drift watchdog navigated back 180s later: two page loads, each re-opening the
+        page's odds socket with a fresh login, for one click. Measured 2026-10-23: 13 clicks + 13 returns = 26 of
+        the page's 42 socket re-opens in 2h47m. The timed reload (PINNACLE_RELOGIN_MIN) is the keepalive that
+        holds the login, so the click sits out there and a keyboard scroll takes its turn. Never while sport-flip
+        is on, which leaves home on purpose; HARDVEN_ORGANIC_NAVCLICK_LEAVE_HOME=1 restores the click."""
+        if os.environ.get("HARDVEN_ORGANIC_SPORT_FLIP", "0") == "1":
+            return False
+        if os.environ.get("HARDVEN_ORGANIC_NAVCLICK_LEAVE_HOME", "0") == "1":
+            return False
+        if not self._sports or self._home_fn is None:
+            return False
+        try:
+            home = self._home_fn() or ""
+        except Exception:
+            return False
+        if not home:
+            return False
+        slug, label = self._sports[0]
+        leaves = not home.split("#")[0].split("?")[0].rstrip("/").lower().endswith(f"/en/{slug}/matchups")
+        if leaves and not self._navclick_off_noted:
+            self._navclick_off_noted = True
+            print(f"[PINNACLE ORGANIC] nav-click OFF while the board's home is {home}: the {label} row links to "
+                  f"/en/{slug}/matchups/, so each click left home and the drift watchdog navigated back 180s "
+                  f"later. Keyboard-scrolling instead; the timed reload holds the login. "
+                  f"HARDVEN_ORGANIC_NAVCLICK_LEAVE_HOME=1 restores the click.", flush=True)
+        return leaves
+
     def _sport_home(self) -> str:
         """The browse URL for the sport we trade (first sport-bearing URL), else the first URL."""
         if self._sports:
@@ -306,6 +340,9 @@ class OrganicActivity:
                 await self._scroll_burst(down_px + random.randint(0, 300), direction=-1)   # up ≥ down → toward the top
             elif roll < 0.85:
                 name = "keyscroll"                  # KEYBOARD scroll → keydown events (interaction keepalive)
+                await self._keyscroll()
+            elif (self._sports or self._urls) and self._navclick_leaves_home():
+                name = "keyscroll"                  # the click would walk the board off home (see the helper)
                 await self._keyscroll()
             elif self._sports or self._urls:
                 name = "navclick"                   # flip sport via a real nav CLICK (soft-nav) → click keepalive

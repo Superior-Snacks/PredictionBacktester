@@ -434,7 +434,7 @@ class PinnacleBrowserSession:
         if os.environ.get("PINNACLE_ORGANIC") != "0":
             from organic import OrganicActivity
             self._organic = OrganicActivity(self._page, browse_urls=self._browse_urls, max_gap=self._activity_sec,
-                                            trim_fn=self._on_idle_trim)
+                                            trim_fn=self._on_idle_trim, home_fn=lambda: self._home_url)
             sports = [s[0] for s in self._organic._sports]
             print(f"[PINNACLE ORGANIC] active — sports to flip: {sports or '(NONE — set PINNACLE_BROWSE_URLS to sport /matchups/ pages)'} | "
                   f"browse_urls={len(self._browse_urls)} | gaps ≤{self._activity_sec:g}s")
