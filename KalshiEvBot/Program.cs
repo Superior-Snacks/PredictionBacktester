@@ -21,6 +21,13 @@ internal static class Program
     {
         if (args.Contains("--self-test")) return SelfTest.Run();
         if (args.Contains("--help") || args.Contains("-h")) { Usage(); return 0; }
+        // Section 10b alone, from resource_logs/ - no venue, no telemetry (so no bot-vs-load line). `--resolve`
+        // prints the same section with it.
+        if (args.Contains("--resources"))
+        {
+            ResourceMonitor.Report(Directory.GetCurrentDirectory(), Array.Empty<Obs>(), ArgInt(args, "--resources") ?? 7);
+            return 0;
+        }
 
         bool once      = args.Contains("--once");
         bool verbose   = args.Contains("--verbose");
@@ -738,7 +745,10 @@ internal static class Program
         }
 
         var statusTask = StatusLoopAsync(eval, feed, oracle, telemetry, snapshots, resolver, pairsPath, cts.Token);
-        await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask, reloadTask, followTask, statusTask);
+        // The machine-sizing recorder, a separate low-priority process (see ResourceMonitor). Report = section 10b.
+        var resourceTask = ResourceMonitor.RunAsync(cts.Token);
+        await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask, reloadTask, followTask, statusTask,
+                      resourceTask);
         PrintStatus(eval, feed, oracle, telemetry, snapshots, resolver, pairsPath);
         Console.WriteLine($"[DONE] {telemetry.RowsWritten} row(s) → {telemetry.Path}");
         return 0;
@@ -1995,6 +2005,7 @@ internal static class Program
             KalshiEvBot — +EV taker bot, M0 (observation only; places nothing).
 
               --self-test          run the offline arithmetic checks and exit (no venue, no network)
+              --resources [days]   print report section 10b (machine resources) from resource_logs/ and exit
               --check              load + validate the pair file and exit; opens NO connection
               --resolve            grade every logged row against Kalshi settlement (REST only, no WS)
               --resolve-deriv      grade the DERIVATIVE pipeline (its own files, never mixed)

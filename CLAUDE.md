@@ -205,6 +205,7 @@ Trade pagination uses timestamp-shifting to bypass the 3000-offset API limit.
 | `test_order.py` | Order placement testing |
 | `check_kalshi_books.py` | Inspect Kalshi order book snapshots |
 | `test_kalshi_auth.py` | Verify Kalshi API authentication |
+| `resource_monitor.py` | Read-only resource recorder for the stack (bot / sidecar / sidecar's browser / other, by process tree) → `resource_logs/ResourceUsage_*.csv`. KalshiEvBot starts it itself (`KalshiEvBot/ResourceMonitor.cs`, windowless child, `--exit-with` the bot's pid, single instance via `monitor.lock`, `EV_RESOURCE_MONITOR=0` = off) and prints the summary as `--resolve` section 10b (`--resources` = that section alone); `--report` = the long form |
 
 ## External Dependencies
 

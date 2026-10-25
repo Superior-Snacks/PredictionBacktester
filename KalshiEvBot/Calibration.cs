@@ -2853,6 +2853,9 @@ public static class Calibration
             Console.WriteLine();
             Console.WriteLine("10. COOLDOWN SHADOW  - not recorded for this pipeline (only the live tennis pipeline logs cooldown skips)");
         }
+        // The machine is shared by every pipeline, so its resources print once, in the live (tennis) report.
+        if (followPrefix == "EvFollowUp")
+            ResourceMonitor.Report(Directory.GetCurrentDirectory(), all);
         // THE RADAR IS LAST, ALWAYS. It is the health check; anything printed after it would be the
         // thing the eye lands on instead. New sections go ABOVE this line.
         RollingRadar(Directory.GetCurrentDirectory(), followPrefix, livePrefix, settled);

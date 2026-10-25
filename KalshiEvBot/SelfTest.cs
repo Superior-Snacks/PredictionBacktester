@@ -911,6 +911,47 @@ public static class SelfTest
             Check(got["G"].Cls == "deep", "4f: depth exactly at the threshold is deep");
         }
 
+        // -- REPORT 10b: RESOURCES (2026-10-25) ---------------------------------------------------------
+        // The loader reads what resource_monitor.py writes: the same header, a row cut short by a kill mid-write
+        // skipped rather than misread, only the newest N day files, and per-group columns in bot/sidecar/browser
+        // order (the report's work-window split rests on browser_Procs).
+        {
+            string tmp = Path.Combine(Path.GetTempPath(), "evres_" + Guid.NewGuid().ToString("N"));
+            string logs = Path.Combine(tmp, ResourceMonitor.LogDir);
+            Directory.CreateDirectory(logs);
+            try
+            {
+                var gf = new[] { "Procs", "CpuCores", "HotThreadPct", "PrivateMB", "WorkingSetMB", "IoKBs", "Threads", "Handles", "Pid" };
+                string head = string.Join(",", new[] { "Timestamp", "IntervalSec", "SysCpuPct", "SysMaxCorePct", "SysAvailMB",
+                                  "SysUsedMB", "SwapUsedMB", "DiskReadKBs", "DiskWriteKBs", "NetRecvKBs", "NetSentKBs",
+                                  "OtherCpuCores", "MonitorCpuPct" }
+                                  .Concat(new[] { "bot", "sidecar", "browser" }.SelectMany(g => gf.Select(f => $"{g}_{f}"))));
+                string Row(string ts, double cpu, int browserProcs, double botCores)
+                    => $"{ts},5,{cpu},40,4000,12000,100,1,2,3,4,0.5,2.5,"
+                     + $"2,{botCores},5,130,90,3,40,500,26660,"
+                     + $"1,0.08,9,230,176,30,20,400,20752,"
+                     + $"{browserProcs},0.1,0,800,800,300,200,3000,0";
+                File.WriteAllLines(Path.Combine(logs, "ResourceUsage_20261023.csv"),
+                                   new[] { head, Row("2026-10-23T10:00:00Z", 10, 13, 0.1) });
+                File.WriteAllLines(Path.Combine(logs, "ResourceUsage_20261024.csv"),
+                                   new[] { head, Row("2026-10-24T10:00:00Z", 20, 13, 0.2) });
+                File.WriteAllLines(Path.Combine(logs, "ResourceUsage_20261025.csv"),
+                                   new[] { head, Row("2026-10-25T10:00:00Z", 30, 0, 0.3),
+                                           Row("2026-10-25T10:00:05Z", 40, 13, 0.4), "2026-10-25T10:00:10Z,5,50" });
+                var got = ResourceMonitor.Load(tmp, 2);
+                Check(got.Count == 3, "10b: the newest 2 day files, the cut-short row skipped", $"got {got.Count}");
+                Check(got.Count == 3 && got[0].At == new DateTime(2026, 10, 24, 10, 0, 0, DateTimeKind.Utc)
+                      && got[0].At.Kind == DateTimeKind.Utc, "10b: timestamps load as UTC, oldest first");
+                Check(got.Count == 3 && got[2].Cores[0] == 0.4 && got[2].Cores[1] == 0.08 && got[2].Priv[2] == 800
+                      && got[2].Pid[0] == 26660, "10b: per-group columns land in bot / sidecar / browser order");
+                Check(got.Count == 3 && got.Count(r => r.Procs[2] > 0) == 2, "10b: browser_Procs splits work windows from dark");
+                Check(got.Count == 3 && got[2].NetKBs == 7, "10b: network = received + sent");
+                Near(ResourceMonitor.Pct(new[] { 1.0, 2, 3, 4, double.NaN }, 0.5), 2.5, 1e-12, "10b: percentile interpolates, NaN ignored");
+                Check(ResourceMonitor.Load(Path.Combine(tmp, "nowhere"), 7).Count == 0, "10b: no log folder = no samples, no throw");
+            }
+            finally { try { Directory.Delete(tmp, true); } catch { } }
+        }
+
         // -- THE KINETIC FILTER --------------------------------------------------------------------
         // The guard's value rests entirely on TryRise refusing to answer when it cannot: a window it has no
         // samples for must NOT read as "flat", or a market we just started watching passes a filter that has
