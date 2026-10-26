@@ -25,7 +25,8 @@ internal static class Program
         // prints the same section with it.
         if (args.Contains("--resources"))
         {
-            ResourceMonitor.Report(Directory.GetCurrentDirectory(), Array.Empty<Obs>(), ArgInt(args, "--resources") ?? 7);
+            try { ResourceMonitor.Report(Directory.GetCurrentDirectory(), Array.Empty<Obs>(), ArgInt(args, "--resources") ?? 7); }
+            catch (Exception ex) { Console.WriteLine($"10b. RESOURCES  - could not be computed: {ex}"); return 1; }
             return 0;
         }
 

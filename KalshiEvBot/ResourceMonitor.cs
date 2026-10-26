@@ -13,8 +13,14 @@ namespace KalshiEvBot;
 /// the bot changes what is measured: enumerating every process on the machine every few seconds allocates, and
 /// that garbage lands on the same heap and thread pool the screening loop runs on. resource_monitor.py runs as
 /// a windowless child at below-normal priority, attributes every process on the PC to bot / sidecar / browser /
-/// other by process tree, and writes resource_logs/ResourceUsage_*.csv. It is read-only, and its own cost is in
-/// every row (MonitorCpuPct, ~2.5% of one core at the 5s default).</para>
+/// report / other by process tree, and writes resource_logs/ResourceUsage_*.csv. It is read-only, and its own
+/// cost is in every row (MonitorCpuPct, ~2.5% of one core at the 5s default).</para>
+///
+/// <para><b>Report runs are their own group (2026-10-26).</b> The block-end radar post runs the full
+/// <c>--resolve</c> from the SIDECAR's on-close command, and the bot launches the daily one, so by process tree
+/// alone a report counted as sidecar or bot. It is neither: the first measured run took 3.8 GB and 2.5 cores
+/// for a minute - by far the stack's largest peak, and one that grows with the telemetry history - so it is
+/// shown apart from the steady stack and added back for the machine's real peak.</para>
 ///
 /// <para><b>Lifetime.</b> Started with <c>--exit-with</c> this process's id, so a crash cannot leave it
 /// orphaned; killed on a clean shutdown; restarted with a growing backoff if it dies on its own. A second
@@ -24,7 +30,9 @@ namespace KalshiEvBot;
 public static class ResourceMonitor
 {
     public const string LogDir = "resource_logs";
-    private static readonly string[] Groups = { "bot", "sidecar", "browser" };
+    // bot, sidecar and browser are the STACK (always running); report is a run that comes and goes.
+    private static readonly string[] Groups = { "bot", "sidecar", "browser", "report" };
+    private const int StackGroups = 3;
 
     public static async Task RunAsync(CancellationToken ct)
     {
@@ -113,15 +121,23 @@ public static class ResourceMonitor
                                   double OtherCores, double MonitorCpu, double[] Procs, double[] Cores,
                                   double[] Hot, double[] Priv, double[] Ws, double[] Io, double[] Pid);
 
-    /// <summary>The last <paramref name="days"/> daily files. Streamed and split on commas: every column is a
-    /// number or the timestamp, so there is nothing to quote, and a week at 5s is ~120k rows - far too many
-    /// to hold as dictionaries the way <see cref="Csv.Read"/> does.</summary>
+    /// <summary>The files of the last <paramref name="days"/> DATES (a day whose columns changed mid-day has a
+    /// <c>_v2</c> file too). Streamed and split on commas: every column is a number or the timestamp, so there
+    /// is nothing to quote, and a week at 5s is ~120k rows - far too many to hold as dictionaries the way
+    /// <see cref="Csv.Read"/> does. Columns are looked up by name, so a file from before a group existed reads
+    /// that group as NaN.</summary>
     internal static List<Sample> Load(string dir, int days)
     {
         var outp = new List<Sample>();
         string logs = Path.Combine(dir, LogDir);
         if (!Directory.Exists(logs)) return outp;
-        foreach (string f in Directory.GetFiles(logs, "ResourceUsage_*.csv").OrderBy(x => x).TakeLast(days))
+        var byDate = Directory.GetFiles(logs, "ResourceUsage_*.csv")
+                              .Select(f => (f, m: Regex.Match(Path.GetFileName(f), @"^ResourceUsage_(\d{8})")))
+                              .Where(t => t.m.Success)
+                              .GroupBy(t => t.m.Groups[1].Value, t => t.f)
+                              .OrderBy(g => g.Key, StringComparer.Ordinal)
+                              .TakeLast(days);
+        foreach (string f in byDate.SelectMany(g => g))
         {
             using var fs = new FileStream(f, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var r = new StreamReader(fs);
@@ -182,18 +198,26 @@ public static class ResourceMonitor
         var dark = run.Where(r => !(r.Procs[2] > 0)).ToList();
         double hours = rows.Sum(r => double.IsFinite(r.Interval) ? r.Interval : 0) / 3600;
         double upH = up.Sum(r => double.IsFinite(r.Interval) ? r.Interval : 0) / 3600;
-        Console.WriteLine($"10b. RESOURCES  (what the stack itself uses - bot, sidecar and its browser, apart from "
-                        + $"everything else on this PC; the machine-sizing check)");
+        Console.WriteLine($"10b. RESOURCES  (what the stack itself uses - bot, sidecar and its browser, plus report runs, "
+                        + $"apart from everything else on this PC; the machine-sizing check)");
         Console.WriteLine($"   {hours:0.0} h recorded over the last {Math.Min(days, rows.Select(r => r.At.Date).Distinct().Count())} "
                         + $"day(s), {upH:0.0} h with the browser up. CPU is in CORES: 1.0 = one core flat out "
                         + $"({Environment.ProcessorCount} logical cores here).");
 
-        static double Stack(Sample r, double[] a) => a.Where(double.IsFinite).Sum();
+        // STACK = the three groups that always run. A report run is added back only where the machine's real
+        // peak is asked for.
+        static double Sum(double[] a, int n)
+        {
+            double s = 0;
+            for (int i = 0; i < n && i < a.Length; i++) if (double.IsFinite(a[i])) s += a[i];
+            return s;
+        }
+        static double Stack(Sample r, double[] a) => Sum(a, StackGroups);
         if (up.Count > 0)
         {
             Console.WriteLine("   WORK WINDOWS   CPU cores p50 / p95 /  max   busiest thread p95   private MB p50 /   max   "
                             + "I/O KB/s p95");
-            for (int g = 0; g < Groups.Length; g++)
+            for (int g = 0; g < StackGroups; g++)
             {
                 var c = up.Select(r => r.Cores[g]).ToList();
                 string hot = g == 2 ? "        -" : $"{Pct(up.Select(r => r.Hot[g]), .95),8:0}%";
@@ -212,6 +236,34 @@ public static class ResourceMonitor
         if (dark.Count > 0)
             Console.WriteLine($"   DARK           stack CPU p95 {Pct(dark.Select(r => Stack(r, r.Cores)), .95):0.00} cores, "
                             + $"private max {Max(dark.Select(r => Stack(r, r.Priv))):0} MB (bot + sidecar, browser closed)");
+
+        // REPORT RUNS: each block-end radar post and the daily report is a full --resolve. One run = consecutive
+        // samples with a report process alive.
+        var runs = new List<List<Sample>>();
+        for (int i = 0; i < rows.Count; i++)
+        {
+            if (!(rows[i].Procs[3] > 0)) continue;
+            if (i > 0 && rows[i - 1].Procs[3] > 0 && runs.Count > 0) runs[^1].Add(rows[i]);
+            else runs.Add(new List<Sample> { rows[i] });
+        }
+        double telemetryGb = Directory.GetFiles(dir, "Ev*_*.csv").Sum(f => new FileInfo(f).Length) / (1024.0 * 1024 * 1024);
+        double reportPeakMb = double.NaN;
+        if (runs.Count > 0)
+        {
+            var peaks = runs.Select(x => x.Max(r => double.IsFinite(r.Priv[3]) ? r.Priv[3] : 0)).ToList();
+            var secs = runs.Select(x => (x[^1].At - x[0].At).TotalSeconds + (double.IsFinite(x[0].Interval) ? x[0].Interval : 0)).ToList();
+            reportPeakMb = peaks.Max();
+            Console.WriteLine($"   REPORT RUNS    {runs.Count} run(s), ~{Pct(secs, .5):0} s each; peak RAM {Pct(peaks, .5):0} MB typical, "
+                            + $"{reportPeakMb:0} MB max; CPU up to {Max(runs.SelectMany(x => x.Select(r => r.Cores[3]))):0.00} cores. "
+                            + $"Grows with the history ({telemetryGb:0.0} GB of telemetry on disk now).");
+        }
+        else if (rows.Any(r => double.IsNaN(r.Procs[3])))
+            Console.WriteLine("   REPORT RUNS    none recorded as their own group yet (split out 2026-10-26; before that a run "
+                            + "counted inside the sidecar or bot rows)");
+        double peakAll = Max(rows.Select(r => Stack(r, r.Priv) + (double.IsFinite(r.Priv[3]) ? r.Priv[3] : 0)));
+        if (double.IsFinite(peakAll))
+            Console.WriteLine($"   PEAK           stack + any report running at that moment: {peakAll / 1024:0.0} GB private at once "
+                            + "(the number RAM has to cover)");
 
         if (run.Count > 0)
         {
@@ -254,18 +306,24 @@ public static class ResourceMonitor
                                   $"{b.Key} {Pct(b.Value, .5):0}/{Pct(b.Value, .9):0} ms (n={b.Value.Count})"))
                             + "   (flat = headroom)");
 
-        // A steady climb across a long run is a leak; a run = one bot / sidecar pid.
+        // A steady climb across a long run is a leak; a run = one bot / sidecar pid. Time is HOURS SINCE THE RUN
+        // BEGAN, never raw ticks: Average() over ticks sums them in a checked long, and ~15 timestamps overflow it -
+        // which on 2026-10-26 threw out of this section and took the radar after it down with the whole report.
+        // The endpoints shown are medians of the first and last 12 samples, so a pairing run's spike is not read
+        // as where the run started or ended.
         var trends = new List<string>();
         for (int g = 0; g < 2; g++)
             foreach (var run_ in rows.Where(r => r.Pid[g] > 0).GroupBy(r => r.Pid[g]))
             {
                 var pts = run_.Where(r => double.IsFinite(r.Priv[g])).ToList();
                 if (pts.Count < 20 || (pts[^1].At - pts[0].At).TotalHours < 2) continue;
-                double mt = pts.Average(r => r.At.Ticks), mm = pts.Average(r => r.Priv[g]);
-                double sxx = pts.Sum(r => (r.At.Ticks - mt) * (r.At.Ticks - mt));
-                double slope = sxx > 0 ? pts.Sum(r => (r.At.Ticks - mt) * (r.Priv[g] - mm)) / sxx * TimeSpan.TicksPerHour : 0;
-                trends.Add($"{Groups[g]} {pts[0].Priv[g]:0} -> {pts[^1].Priv[g]:0} MB over "
-                         + $"{(pts[^1].At - pts[0].At).TotalHours:0.0} h ({slope:+0.0;-0.0} MB/h)");
+                DateTime t0 = pts[0].At;
+                double X(Sample r) => (r.At - t0).TotalHours;
+                double mx = pts.Average(X), mm = pts.Average(r => r.Priv[g]);
+                double sxx = pts.Sum(r => (X(r) - mx) * (X(r) - mx));
+                double slope = sxx > 0 ? pts.Sum(r => (X(r) - mx) * (r.Priv[g] - mm)) / sxx : 0;   // MB per hour
+                double first = Pct(pts.Take(12).Select(r => r.Priv[g]), .5), last = Pct(pts.TakeLast(12).Select(r => r.Priv[g]), .5);
+                trends.Add($"{Groups[g]} {first:0} -> {last:0} MB over {X(pts[^1]):0.0} h ({slope:+0.0;-0.0} MB/h)");
             }
         if (trends.Count > 0)
             Console.WriteLine($"   MEMORY TREND   {string.Join(";  ", trends)}   (a steady climb is a leak)");
@@ -286,12 +344,13 @@ public static class ResourceMonitor
         if (up.Count > 0)
         {
             double p99 = Pct(up.Select(r => Stack(r, r.Cores)), .99);
-            double peakGb = Max(up.Select(r => Stack(r, r.Priv))) / 1024;
+            double peakGb = (double.IsFinite(peakAll) ? peakAll : Max(up.Select(r => Stack(r, r.Priv)))) / 1024;
             double hot = Math.Max(Pct(up.Select(r => r.Hot[0]), .95), Pct(up.Select(r => r.Hot[1]), .95));
             int cores = Math.Max(4, (int)Math.Ceiling(2 * p99));
             int ram = 8 * (int)Math.Ceiling((peakGb * 1.5 + 4) / 8);
-            Console.WriteLine($"   SIZING         CPU: stack p99 {p99:0.00} cores -> {cores}+ physical cores (2x room).  "
-                            + $"RAM: stack peak {peakGb:0.0} GB -> {ram} GB (1.5x + 4 GB for the OS).");
+            Console.WriteLine($"   SIZING         CPU: stack p99 {p99:0.00} cores -> {cores}+ physical cores (2x room; a report run "
+                            + $"is batch work and only runs slower on fewer).  RAM: peak {peakGb:0.0} GB incl. a report -> {ram} GB "
+                            + "(1.5x + 4 GB for the OS).");
             Console.WriteLine($"                  CORE: busiest bot/sidecar thread p95 {hot:0}% of a core -> "
                             + (hot > 60 ? "single-core speed matters, favour a high clock."
                                         : "no thread near a core's limit, core count matters more than clock.")

@@ -4,11 +4,14 @@ Sizing a dedicated machine needs the stack's own numbers, not the whole PC's. Th
 RESOURCE_SAMPLE_SEC (5) seconds and attributes every process to one group by PROCESS TREE:
 
   bot      the C# EV bot: `dotnet run --project KalshiEvBot` / KalshiEvBot.exe and everything it starts
-           (the daily report included). A report run by hand (bin/report) is NOT the bot and counts as other.
   sidecar  the Python sidecar (`uvicorn app:app`) and its subprocesses (pairing runs), minus its browser
   browser  the sidecar's Playwright Chrome: the node driver and every chrome.exe under it. Your own Chrome
            is a different tree and counts as other. 0 processes = a dark window.
-  other    everything else on the machine = system busy minus the three groups above
+  report   any report run - ev_report_discord.py, the bin/report build, a `--resolve` - and what it starts,
+           wherever it was launched from (the block-end radar post comes from the sidecar, the daily report
+           from the bot). Split out 2026-10-26: the first measured run took 3.8 GB for a minute, the stack's
+           biggest peak, and it grows with the telemetry history.
+  other    everything else on the machine = system busy minus the four groups above
 
 Per group: CPU in CORES (one core flat out = 1.0), the busiest single thread (bot + sidecar; % of one core -
 says whether a faster core or more cores helps), private memory, working set, I/O (on Windows this counts disk
@@ -48,7 +51,9 @@ except ImportError:
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WINDOWS = os.name == "nt"
-GROUPS = ("bot", "sidecar", "browser")
+GROUPS = ("bot", "sidecar", "browser", "report")
+STACK = ("bot", "sidecar", "browser")                  # always running; a report comes and goes
+REPORT_MARKERS = ("ev_report_discord", "bin/report", "--resolve")
 GROUP_FIELDS = ("Procs", "CpuCores", "HotThreadPct", "PrivateMB", "WorkingSetMB", "IoKBs", "Threads", "Handles", "Pid")
 BROWSER_NAMES = {"chrome", "chrome.exe", "node", "node.exe", "chromium", "chromium.exe",
                  "headless_shell", "headless_shell.exe"}
@@ -63,8 +68,10 @@ MB = 1024 * 1024
 
 def _root_group(name: str, cmd: str) -> str | None:
     n, c = name.lower(), cmd.replace("\\", "/")
-    if "bin/report" in c or "resource_monitor" in c:
-        return None                                    # a hand-run report or this script: not the bot
+    if "resource_monitor" in c:
+        return None                                    # this script: its cost is MonitorCpuPct
+    if any(m in c for m in REPORT_MARKERS):
+        return "report"
     if n.startswith("kalshievbot"):
         return "bot"
     if n.startswith("dotnet") and "KalshiEvBot" in c and (re.search(r"\brun\b", c) or "KalshiEvBot.dll" in c):
@@ -115,6 +122,9 @@ class Sampler:
         self.cmd_cache = {k: v for k, v in self.cmd_cache.items() if k in live}
         out: dict[int, str] = {}
         me = os.getpid()                               # started by the bot, this IS in the bot's tree: its own
+        # Report roots FIRST: a run sits inside the sidecar's or the bot's tree, and whichever walk reaches a
+        # pid first owns it.
+        roots.sort(key=lambda t: t[1] != "report")
         for root, grp in roots:                        # cost is MonitorCpuPct, never part of "bot"
             stack = [(root, grp == "sidecar" and info[root][0].lower() in BROWSER_NAMES)]
             while stack:
@@ -281,8 +291,28 @@ def record(out_dir: str, interval: float, quiet: bool = False, exit_with: int = 
             pass
 
 
+def _day_path(out_dir: str, day: str) -> str:
+    """The day's file for THIS column set. A file an older version wrote (other columns) is left as it is and the
+    day continues in ResourceUsage_<day>_v2.csv (v3, ...): appending rows of different columns under its header
+    would misalign every row after it. The report reads both, by column name."""
+    want = ",".join(COLUMNS)
+    p = ""
+    for v in range(1, 20):
+        p = os.path.join(out_dir, f"ResourceUsage_{day}{'' if v == 1 else f'_v{v}'}.csv")
+        if not os.path.exists(p):
+            return p
+        try:
+            with open(p, encoding="utf-8") as f:
+                if f.readline().strip() == want:
+                    return p
+        except OSError:
+            pass
+    return p
+
+
 def _record(out_dir: str, interval: float, quiet: bool, exit_with: int) -> None:
     s = Sampler()
+    paths: dict[str, str] = {}
     time.sleep(min(interval, 2.0))
     first = s.sample()
     print(f"[RESOURCE] recording every {interval:g}s to {out_dir}  ({s.ncpu} logical cores, "
@@ -298,7 +328,9 @@ def _record(out_dir: str, interval: float, quiet: bool, exit_with: int) -> None:
         t0 = time.time()
         row = s.sample()
         day = row["Timestamp"][:10].replace("-", "")
-        path = os.path.join(out_dir, f"ResourceUsage_{day}.csv")
+        if day not in paths:
+            paths[day] = _day_path(out_dir, day)
+        path = paths[day]
         new = not os.path.exists(path)
         with open(path, "a", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=COLUMNS)
@@ -332,9 +364,24 @@ def _num(r, k):
         return float("nan")
 
 
+def _max(v):
+    v = [x for x in v if x == x]                       # NaN-safe: a file from before a group existed reads NaN
+    return max(v) if v else float("nan")
+
+
+def _z(x):
+    return x if x == x else 0.0
+
+
 def report(out_dir: str, days: int) -> None:
-    files = sorted(glob.glob(os.path.join(out_dir, "ResourceUsage_*.csv")))[-days:]
+    by_date = defaultdict(list)                        # a day whose columns changed mid-day has a _v2 file too
+    for f in glob.glob(os.path.join(out_dir, "ResourceUsage_*.csv")):
+        m = re.match(r"ResourceUsage_(\d{8})", os.path.basename(f))
+        if m:
+            by_date[m.group(1)].append(f)
+    files = [f for d in sorted(by_date)[-days:] for f in sorted(by_date[d])]
     rows = [r for f in files for r in csv.DictReader(open(f, encoding="utf-8", newline=""))]
+    rows.sort(key=lambda r: r.get("Timestamp", ""))
     if not rows:
         sys.exit(f"no samples in {out_dir} yet - run `python resource_monitor.py` first")
     N = lambda r, k: _num(r, k)
@@ -354,25 +401,43 @@ def report(out_dir: str, days: int) -> None:
         print(f"   {title}  ({len(sel)} samples)")
         print("      group     CPU cores p50 / p95 / max    busiest thread p95 / max   private MB p50 / max   "
               "working set MB max   I/O KB/s p95   procs")
-        for g in GROUPS:
+        for g in STACK:
             c = [N(r, f"{g}_CpuCores") for r in sel]
             hot = [N(r, f"{g}_HotThreadPct") for r in sel]
             pm = [N(r, f"{g}_PrivateMB") for r in sel]
-            print(f"      {g:8} {_pct(c, .5):6.2f} {_pct(c, .95):6.2f} {max(c):6.2f}       "
-                  + (f"{_pct(hot, .95):5.0f}% {max(hot):5.0f}%      " if g != "browser" else "      -             ")
-                  + f"{_pct(pm, .5):7.0f} {max(pm):7.0f}        {max(N(r, f'{g}_WorkingSetMB') for r in sel):7.0f}"
+            print(f"      {g:8} {_pct(c, .5):6.2f} {_pct(c, .95):6.2f} {_max(c):6.2f}       "
+                  + (f"{_pct(hot, .95):5.0f}% {_max(hot):5.0f}%      " if g != "browser" else "      -             ")
+                  + f"{_pct(pm, .5):7.0f} {_max(pm):7.0f}        {_max(N(r, f'{g}_WorkingSetMB') for r in sel):7.0f}"
                   + f"          {_pct([N(r, f'{g}_IoKBs') for r in sel], .95):7.1f}   "
                   + f"{_pct([N(r, f'{g}_Procs') for r in sel], .5):.0f}")
-        stack_c = [sum(N(r, f"{g}_CpuCores") for g in GROUPS) for r in sel]
-        stack_m = [sum(N(r, f"{g}_PrivateMB") for g in GROUPS) for r in sel]
-        print(f"      STACK    {_pct(stack_c, .5):6.2f} {_pct(stack_c, .95):6.2f} {max(stack_c):6.2f}"
-              f"                                 {_pct(stack_m, .5):7.0f} {max(stack_m):7.0f}")
+        stack_c = [sum(_z(N(r, f"{g}_CpuCores")) for g in STACK) for r in sel]
+        stack_m = [sum(_z(N(r, f"{g}_PrivateMB")) for g in STACK) for r in sel]
+        print(f"      STACK    {_pct(stack_c, .5):6.2f} {_pct(stack_c, .95):6.2f} {_max(stack_c):6.2f}"
+              f"                                 {_pct(stack_m, .5):7.0f} {_max(stack_m):7.0f}")
         oc = [N(r, "OtherCpuCores") for r in sel]
-        print(f"      other    {_pct(oc, .5):6.2f} {_pct(oc, .95):6.2f} {max(oc):6.2f}   (everything else on this PC)")
+        print(f"      other    {_pct(oc, .5):6.2f} {_pct(oc, .95):6.2f} {_max(oc):6.2f}   (everything else on this PC)")
 
     block("WORK WINDOWS (browser up)", up)
     block("DARK (bot + sidecar only)", [r for r in running if N(r, "browser_Procs") == 0])
-    print()
+    # report runs: consecutive samples with a report process alive
+    runs, cur = [], None
+    for r in rows:
+        if N(r, "report_Procs") > 0:
+            if cur is None:
+                cur = []
+                runs.append(cur)
+            cur.append(r)
+        else:
+            cur = None
+    if runs:
+        peaks = [_max(N(r, "report_PrivateMB") for r in x) for x in runs]
+        secs = [(datetime.strptime(x[-1]["Timestamp"], "%Y-%m-%dT%H:%M:%SZ")
+                 - datetime.strptime(x[0]["Timestamp"], "%Y-%m-%dT%H:%M:%SZ")).total_seconds() + _z(N(x[0], "IntervalSec"))
+                for x in runs]
+        print(f"   REPORT RUNS  {len(runs)} run(s), ~{_pct(secs, .5):.0f} s each; peak RAM {_pct(peaks, .5):.0f} MB typical, "
+              f"{_max(peaks):.0f} MB max; CPU up to {_max(N(r, 'report_CpuCores') for x in runs for r in x):.2f} cores")
+    peak_all = _max(sum(_z(N(r, f"{g}_PrivateMB")) for g in GROUPS) for r in rows)
+    print(f"   PEAK         stack + any report running at that moment: {peak_all / 1024:.1f} GB private at once\n")
 
     sc = [N(r, "SysCpuPct") for r in running]
     print(f"   SYSTEM while the stack ran: CPU {_pct(sc, .5):.0f}% / {_pct(sc, .95):.0f}% / {max(sc):.0f}% (p50/p95/max), "
@@ -426,8 +491,7 @@ def report(out_dir: str, days: int) -> None:
     # does load slow the bot? the bot->sidecar oracle hop by system CPU at that moment
     stamps = [datetime.strptime(r["Timestamp"], "%Y-%m-%dT%H:%M:%SZ").timestamp() for r in rows]
     buckets = defaultdict(list)
-    for f in files:
-        day = re.search(r"(\d{8})", os.path.basename(f)).group(1)
+    for day in sorted({re.search(r"(\d{8})", os.path.basename(f)).group(1) for f in files}):
         tel = os.path.join(HERE, f"EvTelemetry_{day}.csv")
         if not os.path.exists(tel):
             continue
@@ -457,8 +521,8 @@ def report(out_dir: str, days: int) -> None:
 
     # sizing: measured peaks with headroom, as a starting point rather than a verdict
     if up:
-        sc95 = _pct([sum(N(r, f"{g}_CpuCores") for g in GROUPS) for r in up], .99)
-        smax = max(sum(N(r, f"{g}_PrivateMB") for g in GROUPS) for r in up) / 1024
+        sc95 = _pct([sum(_z(N(r, f"{g}_CpuCores")) for g in STACK) for r in up], .99)
+        smax = peak_all / 1024                         # stack + a report, the moment RAM actually has to cover
         hot = max(_pct([N(r, f"{g}_HotThreadPct") for r in up], .95) for g in ("bot", "sidecar"))
         cores = max(4, math.ceil(2 * sc95))
         ram = 8 * math.ceil((smax * 1.5 + 4) / 8)
@@ -467,7 +531,7 @@ def report(out_dir: str, days: int) -> None:
         print(f"      CORE  busiest bot/sidecar thread p95 {hot:.0f}% of a core"
               + (" -> single-core speed matters: favour a high-clock CPU" if hot > 60 else
                  " -> no single thread is near a core's limit; core count matters more than clock"))
-        print(f"      RAM   the stack's peak private memory {smax:.1f} GB -> {ram} GB total (1.5x + 4 GB for the OS)")
+        print(f"      RAM   peak private memory incl. a report run {smax:.1f} GB -> {ram} GB total (1.5x + 4 GB for the OS)")
         if recent:
             print(f"      DISK  ~{avg * 365 / 1024:.0f} GB/year of telemetry -> any 256 GB+ SSD; an SSD matters more than size")
 

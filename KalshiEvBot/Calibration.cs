@@ -2854,8 +2854,18 @@ public static class Calibration
             Console.WriteLine("10. COOLDOWN SHADOW  - not recorded for this pipeline (only the live tennis pipeline logs cooldown skips)");
         }
         // The machine is shared by every pipeline, so its resources print once, in the live (tennis) report.
+        // A SIDE SECTION MUST NEVER COST THE RADAR. On 2026-10-26 an overflow in 10b threw out of this method, the
+        // radar below never printed, and the block-end post went to Discord as "not enough settled fills".
         if (followPrefix == "EvFollowUp")
-            ResourceMonitor.Report(Directory.GetCurrentDirectory(), all);
+        {
+            try { ResourceMonitor.Report(Directory.GetCurrentDirectory(), all); }
+            catch (Exception ex)
+            {
+                Console.WriteLine();
+                Console.WriteLine($"10b. RESOURCES  - could not be computed ({ex.GetType().Name}: {ex.Message}); "
+                                + "the radar below is unaffected");
+            }
+        }
         // THE RADAR IS LAST, ALWAYS. It is the health check; anything printed after it would be the
         // thing the eye lands on instead. New sections go ABOVE this line.
         RollingRadar(Directory.GetCurrentDirectory(), followPrefix, livePrefix, settled);

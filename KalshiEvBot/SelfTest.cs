@@ -948,8 +948,58 @@ public static class SelfTest
                 Check(got.Count == 3 && got[2].NetKBs == 7, "10b: network = received + sent");
                 Near(ResourceMonitor.Pct(new[] { 1.0, 2, 3, 4, double.NaN }, 0.5), 2.5, 1e-12, "10b: percentile interpolates, NaN ignored");
                 Check(ResourceMonitor.Load(Path.Combine(tmp, "nowhere"), 7).Count == 0, "10b: no log folder = no samples, no throw");
+                Check(got.Count == 3 && double.IsNaN(got[2].Procs[3]), "10b: a file from before the report group reads it as NaN");
             }
             finally { try { Directory.Delete(tmp, true); } catch { } }
+        }
+
+        // -- REPORT 10b, THE WHOLE SECTION (2026-10-26) ----------------------------------------------------
+        // The loader checks above passed while the section itself threw: its memory trend averaged raw DateTime
+        // ticks in a checked long, ~15 of them overflow, and only real data ever reached that path (>= 20 samples
+        // over >= 2 h). The throw took the radar down with the report. So: run the section end to end on three
+        // hours of samples, with a run of a report, across a day that has an old-format and a new-format file.
+        {
+            string tmp = Path.Combine(Path.GetTempPath(), "evres_" + Guid.NewGuid().ToString("N"));
+            string logs = Path.Combine(tmp, ResourceMonitor.LogDir);
+            Directory.CreateDirectory(logs);
+            var prevOut = Console.Out;
+            try
+            {
+                var gf = new[] { "Procs", "CpuCores", "HotThreadPct", "PrivateMB", "WorkingSetMB", "IoKBs", "Threads", "Handles", "Pid" };
+                var sys = new[] { "Timestamp", "IntervalSec", "SysCpuPct", "SysMaxCorePct", "SysAvailMB", "SysUsedMB",
+                                  "SwapUsedMB", "DiskReadKBs", "DiskWriteKBs", "NetRecvKBs", "NetSentKBs", "OtherCpuCores", "MonitorCpuPct" };
+                string Head(params string[] groups) => string.Join(",", sys.Concat(groups.SelectMany(g => gf.Select(f => $"{g}_{f}"))));
+                var t0 = new DateTime(2026, 10, 26, 6, 0, 0, DateTimeKind.Utc);
+                // bot climbs 10 MB per hour; the browser is up; three samples carry a 3 GB report run
+                string Row(int i, bool report) => $"{t0.AddMinutes(5 * i):yyyy-MM-ddTHH:mm:ssZ},300,20,30,6000,10000,0,1,2,3,4,0.5,2.5,"
+                    + $"2,0.1,5,{100 + 10 * (5 * i / 60.0):0.###},90,3,40,500,4242,"
+                    + "1,0.08,9,230,176,30,20,400,5151,"
+                    + "13,0.1,0,800,800,300,200,3000,0"
+                    + (report ? (i is >= 10 and <= 12 ? ",2,2.4,0,3000,3000,50,60,800,0" : ",0,0,0,0,0,0,0,0,0") : "");
+                File.WriteAllLines(Path.Combine(logs, "ResourceUsage_20261026.csv"),
+                                   new[] { Head("bot", "sidecar", "browser") }.Concat(Enumerable.Range(0, 8).Select(i => Row(i, false))));
+                File.WriteAllLines(Path.Combine(logs, "ResourceUsage_20261026_v2.csv"),
+                                   new[] { Head("bot", "sidecar", "browser", "report") }.Concat(Enumerable.Range(8, 30).Select(i => Row(i, true))));
+                var rows = ResourceMonitor.Load(tmp, 1);
+                Check(rows.Count == 38, "10b: both files of the one latest DATE are read (old format + _v2)", $"got {rows.Count}");
+                var sw = new StringWriter();
+                Exception? threw = null;
+                Console.SetOut(sw);
+                try { ResourceMonitor.Report(tmp, Array.Empty<Obs>(), 1); }
+                catch (Exception ex) { threw = ex; }
+                finally { Console.SetOut(prevOut); }
+                string text = sw.ToString();
+                Check(threw is null, "10b: the whole section runs on 3 h of samples without throwing", threw?.GetType().Name ?? "");
+                Check(text.Contains("MEMORY TREND") && text.Contains("bot ") && text.Contains("+10.0 MB/h"),
+                      "10b: the memory trend reads the bot's 10 MB/h climb", text.Split('\n').FirstOrDefault(l => l.Contains("TREND")) ?? "no trend line");
+                Check(text.Contains("REPORT RUNS    1 run(s)") && text.Contains("3000 MB max"),
+                      "10b: three consecutive report samples are one run, peaking at 3000 MB",
+                      text.Split('\n').FirstOrDefault(l => l.Contains("REPORT")) ?? "no report line");
+                Check(text.Contains("PEAK") && text.Contains("4.0 GB private at once"),
+                      "10b: the peak adds the report to the stack (110 + 230 + 800 + 3000 MB = 4.0 GB)",
+                      text.Split('\n').FirstOrDefault(l => l.Contains("PEAK")) ?? "no peak line");
+            }
+            finally { Console.SetOut(prevOut); try { Directory.Delete(tmp, true); } catch { } }
         }
 
         // -- THE KINETIC FILTER --------------------------------------------------------------------
