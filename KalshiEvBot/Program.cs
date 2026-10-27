@@ -29,6 +29,15 @@ internal static class Program
             catch (Exception ex) { Console.WriteLine($"10b. RESOURCES  - could not be computed: {ex}"); return 1; }
             return 0;
         }
+        // --sport ONLY NARROWS A REPORT. Without a --resolve this exe goes on to start the bot - a second Kalshi
+        // WebSocket on the one account - so a stray `--sport basketball` must stop here, never run.
+        if (args.Contains("--sport")
+            && !(args.Contains("--resolve") || args.Contains("--resolve-deriv") || args.Contains("--resolve-shadow")))
+        {
+            Console.WriteLine("[SPORT] --sport narrows a report: use it with --resolve (e.g. --resolve --sport basketball). "
+                            + "Nothing was started.");
+            return 2;
+        }
 
         bool once      = args.Contains("--once");
         bool verbose   = args.Contains("--verbose");
@@ -134,6 +143,30 @@ internal static class Program
             // inflating the very dataset this report exists to grade.
             string pipe = args.Contains("--resolve-deriv") ? "Deriv" : args.Contains("--resolve-shadow") ? "Shadow" : "";
             string? g = ArgValue(args, "--resolve-glob");
+
+            // ── --sport X: ONE sport's resolve (2026-10-27) ──────────────────────────────────────────────
+            // Plain --resolve picks the pipeline the sport is LOGGED in - a live sport (EV_LIVE_SPORTS) in the main
+            // files, every other one in the shadow files - so `--resolve --sport basketball` just works. An explicit
+            // --resolve-shadow / --resolve-deriv still wins. Calibration.SportFilter then narrows every read.
+            string? sport = ArgValue(args, "--sport")?.Trim().ToLowerInvariant();
+            bool autoPipe = false;
+            if (sport is not null)
+            {
+                string[] known = { "tennis", "basketball", "football", "baseball", "hockey", "soccer", "other" };
+                if (!known.Contains(sport))
+                {
+                    Console.WriteLine($"[SPORT] unknown sport '{sport}' - one of: {string.Join(", ", known)}.");
+                    return 2;
+                }
+                Calibration.SportFilter = sport;
+                if (!args.Contains("--resolve-shadow") && !args.Contains("--resolve-deriv"))
+                {
+                    autoPipe = true;
+                    pipe = EvSports.ParseLive(Environment.GetEnvironmentVariable("EV_LIVE_SPORTS")).Contains(sport) ? "" : "Shadow";
+                }
+                Console.WriteLine($"[RESOLVE] SPORT: {sport.ToUpperInvariant()} ONLY - every section reads {sport} rows and "
+                                + $"nothing else (the {(pipe == "" ? "main" : pipe.ToLowerInvariant())} pipeline's files).");
+            }
             if (pipe == "Deriv")
                 Console.WriteLine("[RESOLVE] DERIVATIVES ONLY (spread/total). These are a separate "
                                 + "pipeline with its own thresholds; none of the moneyline calibration "
@@ -144,7 +177,16 @@ internal static class Program
                                 + "sport is its own test: read 4d BY SPORT, and nothing here says anything about "
                                 + "tennis. There are no fills, so the fill-based sections are empty by design.");
             using var rk = new KalshiOrderClient(config);
-            return await ResolveAsync(rk, g, !args.Contains("--all-obs"), pipe);
+            int rc = await ResolveAsync(rk, g, !args.Contains("--all-obs"), pipe);
+            // A RETIRED sport's history sits in the files of the pipeline it ran on back then (soccer: the main
+            // files), so an auto-routed sport with nothing in its pipeline tries the other one, once.
+            if (rc == 3 && autoPipe)
+            {
+                pipe = pipe == "" ? "Shadow" : "";
+                Console.WriteLine($"[RESOLVE] no {sport} rows there - trying the {(pipe == "" ? "main" : "shadow")} pipeline's files.");
+                rc = await ResolveAsync(rk, g, !args.Contains("--all-obs"), pipe);
+            }
+            return rc == 3 ? 1 : rc;
         }
 
         string? pairsPath = EvPairLoader.Locate(pairsArg);
@@ -781,7 +823,7 @@ internal static class Program
         {
             Console.WriteLine($"[RESOLVE] no {string.Join(" or ", patterns)} in {dir}. "
                             + "Run the bot first, or pass --resolve-glob <pattern>.");
-            return 1;
+            return Calibration.SportFilter is null ? 1 : 3;          // 3 = the caller may try the other pipeline
         }
 
         // Typed rows, from the per-file cache wherever the file has not changed since it was last parsed
@@ -798,6 +840,13 @@ internal static class Program
         }
         if (rawRows == 0) { Console.WriteLine("[RESOLVE] nothing logged yet."); return 1; }
         Console.WriteLine($"[RESOLVE] {ReportCache.Summary()}");
+        if (Calibration.SportFilter is { } only)
+        {
+            int before = raw.Count;
+            raw.RemoveAll(o => !Calibration.InScope(o.Ticker));
+            Console.WriteLine($"[RESOLVE] --sport {only}: {raw.Count} of {before} row(s) are {only}.");
+            if (raw.Count == 0) return 3;                             // 3 = the caller may try the other pipeline
+        }
 
         var tickers = raw.Select(o => o.Ticker).Distinct(StringComparer.Ordinal).ToList();
         Console.WriteLine($"[RESOLVE] fetching settlement for {tickers.Count} market(s)…");
@@ -2015,6 +2064,9 @@ internal static class Program
               --check              load + validate the pair file and exit; opens NO connection
               --resolve            grade every logged row against Kalshi settlement (REST only, no WS)
               --resolve-deriv      grade the DERIVATIVE pipeline (its own files, never mixed)
+              --resolve-shadow     grade the SHADOW sports pipeline (observed, never traded)
+              --sport <name>       with --resolve: ONE sport's resolve (tennis, basketball, football,
+                                   baseball, hockey, soccer); finds the pipeline the sport is logged in
               --resolve-glob <p>   restrict --resolve to CSVs matching this pattern
               --all-obs            --resolve without deduping to one observation per ticker+side
               --once               warm up, evaluate every pair once, print the tally, exit

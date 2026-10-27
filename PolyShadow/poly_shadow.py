@@ -84,7 +84,7 @@ _ENV_KEYS = (
     "EV_REQUIRE_IN_PLAY", "EV_LED_MOVE_MIN", "EV_LED_RATIO", "EV_MAX_WS_REST_GAP",
     "EV_ORACLE_MAX_AGE_MS", "EV_ORACLE_MAX_AGE_INPLAY_MS", "EV_RECHECK_COOLDOWN_MS", "EV_FOLLOWUP_SEC",
     "EV_SNAPSHOT_MIN", "EV_LIVE_SPORTS", "EV_SHADOW_NEAR_ONLY", "EV_SHADOW_LEAD_MIN", "EV_SHADOW_MAX_LIVE_MIN",
-    "EV_PAIRS_FILE", "HARDVEN_SIDECAR_URL",
+    "EV_PAIRS_FILE", "HARDVEN_SIDECAR_URL", "EV_GAP_BAND_CENTS",
 )
 
 
@@ -139,6 +139,8 @@ class Cfg:
         self.shadow_near_only = f("EV_SHADOW_NEAR_ONLY", 1) > 0.5
         self.shadow_lead = f("EV_SHADOW_LEAD_MIN", 30)
         self.shadow_max_live = f("EV_SHADOW_MAX_LIVE_MIN", 300)
+        # the report's gap bands (core under it, wide at or above) - the same cut as the bot's resolve
+        self.gap_band = f("EV_GAP_BAND_CENTS", 3.0)
         self.sidecar = (env.get("HARDVEN_SIDECAR_URL") or "http://127.0.0.1:8787").rstrip("/")
         self.pairs_file = Path(env.get("EV_PAIRS_FILE") or ROOT / "HardVenArb" / "cross_pairs.json")
         # this process's own knobs (POLY_*; environment only)

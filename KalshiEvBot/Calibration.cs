@@ -375,10 +375,11 @@ public static class Calibration
 
         // every attempt, with what it needs
         var att = new List<(string Key, string Ticker, string Side, DateTime At, double Fill, double Avg,
-                            double Limit, double Fee, string Status, double PTrue)>();
+                            double Limit, double Fee, string Status, double PTrue, double EvCents)>();
         foreach (string f in files)
             foreach (var row in Csv.Read(f))
             {
+                if (!InScope(Csv.Str(row, "Ticker"))) continue;
                 double req = Csv.Num(row, "Requested");
                 if (double.IsNaN(req) || req <= 0) continue;
                 if (!DateTime.TryParse(Csv.Str(row, "At"), CultureInfo.InvariantCulture,
@@ -386,7 +387,7 @@ public static class Calibration
                 string tk = Csv.Str(row, "Ticker"), sd = Csv.Str(row, "Side");
                 att.Add((tk + "|" + sd, tk, sd, at, Csv.Num(row, "FillCount"), Csv.Num(row, "AvgFillPrice"),
                          Csv.Num(row, "LimitPrice"), Csv.Num(row, "FeeChargedUsd"), Csv.Str(row, "Status"),
-                         Csv.Num(row, "PTrue")));
+                         Csv.Num(row, "PTrue"), Csv.Num(row, "EvCents")));
             }
         // FIRST ENTRIES, NOT ORDERS. With EV_LIVE_REENTRY a side fills several times. Counted as orders,
         // re-entries would lift VELOCITY exactly when first entries fall - a sidecar that lost half the live
@@ -422,6 +423,15 @@ public static class Calibration
             string tag = grade == 0 ? "[OK]   " : grade == 1 ? "[WATCH]" : "[STOP] ";
             Console.ForegroundColor = grade == 0 ? ConsoleColor.Green : grade == 1 ? ConsoleColor.Yellow : ConsoleColor.Red;
             Console.WriteLine($"   {tag} {text}");
+            Console.ResetColor();
+        }
+        // A BREAKDOWN of the line above it, never a vote: lower-case tags, which neither the VERDICT (built from
+        // `grades`) nor the Discord STOP flag (keyed on the upper-case tags) can see. Indented two more.
+        static void Sub(int grade, string text)
+        {
+            string tag = grade == 0 ? "[ok]   " : grade == 1 ? "[watch]" : "[stop] ";
+            Console.ForegroundColor = grade == 0 ? ConsoleColor.Green : grade == 1 ? ConsoleColor.Yellow : ConsoleColor.Red;
+            Console.WriteLine($"     {tag} {text}");
             Console.ResetColor();
         }
         var grades = new List<int>();
@@ -523,7 +533,7 @@ public static class Calibration
         // PinState and are LEGACY: counted, named, never averaged. A side whose first signal's T+300 reading
         // was refused (suspended / stale / gone) is left out rather than swapped for a later signal's reading,
         // which would select on readability.
-        var firstAt = new Dictionary<string, (DateTime At, double Cents, bool Clean, bool Legacy)>(StringComparer.Ordinal);
+        var firstAt = new Dictionary<string, (DateTime At, double Cents, bool Clean, bool Legacy, double Gap)>(StringComparer.Ordinal);
         foreach (var r in ReportCache.LoadFollowUps(dir, followPrefix))
         {
             if (r.Decision != "SIGNAL" || double.IsNaN(r.AgeSec) || Math.Abs(r.AgeSec - 300) > 30) continue;
@@ -532,7 +542,8 @@ public static class Calibration
             if (firstAt.TryGetValue(key, out var have) && have.At <= r.EntryAt) continue;
             bool legacy = string.IsNullOrEmpty(r.PinState);
             bool clean  = r.PinState == "open" && double.IsFinite(r.NowPTrue);
-            firstAt[key] = (r.EntryAt, clean ? (r.NowPTrue - r.EntryPTrue) * 100 : double.NaN, clean, legacy);   // + = toward our side
+            firstAt[key] = (r.EntryAt, clean ? (r.NowPTrue - r.EntryPTrue) * 100 : double.NaN, clean, legacy,   // + = toward our side
+                            r.EntryEvCents);
         }
         var inWinD   = firstAt.Values.Where(v => v.At >= oldest && v.At <= newest).ToList();
         int legacyW  = inWinD.Count(v => v.Legacy);
@@ -559,6 +570,34 @@ public static class Calibration
                    + (dLife.N >= 100 ? $"lifetime {dLife.M:+0.00;-0.00}" : $"clean history n={dLife.N}") + ")   "
                    + $"bought {bought:+0.00;-0.00}c/ctr -> CUSHION {cushion:+0.00;-0.00}c (t={tC:+0.0;-0.0})   "
                    + $"(n={dWin.N}{(refusedW > 0 ? $", {refusedW} refused" : "")}; red = cushion negative at 2 sigma)");
+
+            // ── THE SAME LINE PER GAP BAND (see GapBandCents) ─────────────────────────────────────────
+            // Each side is filed by the gap it was bought at: a signal's drift by its entry gap, a fill's bought
+            // edge by the gap on its order. Same colours as the line above (red = cushion negative at 2 sigma),
+            // but a breakdown, not a vote - the verdict stays with the pooled line.
+            double band = GapBandCents;
+            foreach (var (core, label) in new[] { (true, $"gap <{band:0}c "), (false, $"gap >={band:0}c") })
+            {
+                var dB = Stat(inWinD.Where(v => v.Clean && CoreGap(v.Gap) == core).Select(v => v.Cents));
+                double sB = 0, cB = 0;
+                foreach (var r in att.Where(r => r.Fill >= 1 && r.At >= oldest && r.At <= newest
+                                                 && double.IsFinite(r.PTrue) && CoreGap(r.EvCents) == core))
+                {
+                    double px = r.Avg > 0 ? r.Avg : r.Limit;
+                    double fe = double.IsNaN(r.Fee) ? 0 : r.Fee;
+                    sB += r.Fill * (r.PTrue - px) - fe;
+                    cB += r.Fill;
+                }
+                if (dB.N < 10 || double.IsNaN(dB.Se) || cB <= 0)
+                {
+                    Sub(1, $"{label}  drift n={dB.N}, {cB:0} contract(s) bought - too few to read");
+                    continue;
+                }
+                double bB = 100 * sB / cB, cuB = bB + dB.M, tB = dB.Se > 0 ? cuB / dB.Se : 0;
+                Sub(cuB + 2 * dB.Se < 0 ? 2 : cuB < 0 ? 1 : 0,
+                    $"{label}  drift {dB.M:+0.00;-0.00}c +/-{dB.Se:0.00} (n={dB.N})   bought {bB:+0.00;-0.00}c/ctr "
+                  + $"({cB:0} ctr) -> cushion {cuB:+0.00;-0.00}c (t={tB:+0.0;-0.0})");
+            }
         }
         else if (legacyW > 0)
         {
@@ -649,6 +688,7 @@ public static class Calibration
         foreach (string f in files)
             foreach (var r in Csv.Read(f))
             {
+                if (!InScope(Csv.Str(r, "Ticker"))) continue;
                 if (!DateTime.TryParse(Csv.Str(r, "Timestamp"), CultureInfo.InvariantCulture,
                                        DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var at)) continue;
                 if (!r.ContainsKey("EvAtArmCents")) { oldDef++; oldDays.Add(at.Date); continue; }
@@ -776,6 +816,27 @@ public static class Calibration
         Console.WriteLine("   measurement rather than inference, without the strategy changing while its verdict is open.");
     }
 
+    /// <summary>THE GAP BANDS (2026-10-27, operator's request). The gap is the edge we bought - P_true minus the
+    /// REST ask minus the fee, in cents: the telemetry's <c>Ev</c>, the follow-up's <c>EntryEvCents</c>, the live
+    /// log's <c>EvCents</c>, all the same number. Under <c>EV_GAP_BAND_CENTS</c> (3) is the CORE band, the bulk of
+    /// the signals; at or above it are the WIDE gaps, a minority whose bigger bought edge and bigger give-back move
+    /// a pooled number on their own - most of all in a rolling window whose oldest days, where the wide gaps did
+    /// best, are about to roll off. So sections 9, 11 and 4f print each band beside the pooled line. Never a gate
+    /// and never a vote: the pooled lines still carry every verdict.</summary>
+    internal static double GapBandCents => EvConfig.Env("EV_GAP_BAND_CENTS", 3.0);
+
+    /// <summary>true = core (gap under the band), false = wide, null = no gap on record (older rows).</summary>
+    internal static bool? CoreGap(double gapCents) => double.IsFinite(gapCents) ? gapCents < GapBandCents : null;
+
+    /// <summary>
+    /// <c>--sport X</c> (2026-10-27, operator's request): a DISTINCT resolve per sport. Null = every sport, exactly as
+    /// before. Applied where the report READS - the telemetry and snapshot rows (Program.ResolveAsync), the
+    /// follow-ups (ReportCache.LoadFollowUps) and every order / ladder / cooldown log loop - so no section can mix
+    /// in another sport through a side door. The sport names are <see cref="EvSports.Of"/>'s.
+    /// </summary>
+    internal static string? SportFilter;
+    internal static bool InScope(string? ticker) => SportFilter is null || Sport(ticker ?? "") == SportFilter;
+
     private static void ConvergenceReport(string dir, string followPrefix, string livePrefix,
                                           IReadOnlyList<Obs> obs)
     {
@@ -788,7 +849,7 @@ public static class Calibration
         var filled = new HashSet<string>(StringComparer.Ordinal);
         foreach (string lf in Directory.GetFiles(dir, livePrefix + "_*.csv"))
             foreach (var r in Csv.Read(lf))
-                if (Csv.Num(r, "FillCount") >= 1)
+                if (Csv.Num(r, "FillCount") >= 1 && InScope(Csv.Str(r, "Ticker")))
                     filled.Add(Csv.Str(r, "Ticker") + "|" + Csv.Str(r, "Side"));
 
         // DEPTH AT ENTRY, for rows written before the follow-up carried it. The telemetry row for the same
@@ -819,7 +880,7 @@ public static class Calibration
         }
 
         // key -> (checkpoint, ticker|side) -> first observation
-        var seen = new Dictionary<(int Cp, string Key), (double Ea, double Ep, double Na, double Nb, double Depth)>();
+        var seen = new Dictionary<(int Cp, string Key), (double Ea, double Ep, double Na, double Nb, double Depth, double Gap)>();
         var cps = new SortedSet<int>();
         foreach (var r in ReportCache.LoadFollowUps(dir, followPrefix))
             {
@@ -839,7 +900,7 @@ public static class Calibration
                 double depth = r.EntryDepth;                                         // NaN before the column
                 if (double.IsNaN(depth) && r.EntryAt != DateTime.MinValue)
                     depth = DepthFor(key, r.EntryAt);
-                seen[k] = (ea, ep, na, nb, depth);
+                seen[k] = (ea, ep, na, nb, depth, r.EntryEvCents);
             }
         if (seen.Count == 0) return;
 
@@ -851,16 +912,18 @@ public static class Calibration
         Console.WriteLine("   in cents, with its error bar. came-to-us = share that rose at all (ties excluded);");
         Console.WriteLine($"   reached = arrived within {tol * 100:0.#}c of entry P_true; BID = NowBid - EntryAsk, could we have sold above cost.");
 
-        void Block(string label, Func<string, (double Ea, double Ep, double Na, double Nb, double Depth), bool> keep)
+        void Block(string label, Func<string, (double Ea, double Ep, double Na, double Nb, double Depth, double Gap), bool> keep,
+                   int[]? only = null)
         {
             var rowsOut = new List<string>();
             foreach (int cp in cps)
             {
+                if (only is not null && !only.Contains(cp)) continue;
                 var v = seen.Where(kv => kv.Key.Cp == cp && keep(kv.Key.Key, kv.Value)).Select(kv => kv.Value).ToList();
                 if (v.Count < 5) continue;
                 int our = 0, against = 0, reached = 0, nBid = 0;
                 var moves = new List<double>(); double bidSum = 0, gapSum = 0;
-                foreach (var (ea, ep, na, nb, _) in v)
+                foreach (var (ea, ep, na, nb, _, _) in v)
                 {
                     int dir = ep > ea ? 1 : -1;                 // a signal is ask BELOW fair, so dir is +1
                     double d = (na - ea) * dir;
@@ -898,6 +961,14 @@ public static class Calibration
         // converge differently — the unbuyable half more, on the ask — and only one of them is the strategy.
         Block("ALL SIGNALS (telemetry)", (_, __) => true);
         Block("FILLABLE (book showed depth at our limit) - this is the strategy", (_, v) => !double.IsNaN(v.Depth) && v.Depth > 0);
+        // THE FILLABLE LINES PER GAP BAND (see GapBandCents), at the three checkpoints the radar and the forward
+        // test read: does Kalshi still come to us on the core band, and is the wide band any different?
+        double band = GapBandCents;
+        int[] keyCps = { 20, 60, 300 };
+        Block($"FILLABLE, gap <{band:0}c (the core band)",
+              (_, v) => !double.IsNaN(v.Depth) && v.Depth > 0 && CoreGap(v.Gap) == true, keyCps);
+        Block($"FILLABLE, gap >={band:0}c (the wide gaps)",
+              (_, v) => !double.IsNaN(v.Depth) && v.Depth > 0 && CoreGap(v.Gap) == false, keyCps);
         Block("UNBUYABLE (nobody offering at our price)", (_, v) => !double.IsNaN(v.Depth) && v.Depth <= 0);
         if (filled.Count > 0) Block("FILLED ONLY (real orders)", (k, _) => filled.Contains(k));
 
@@ -949,6 +1020,7 @@ public static class Calibration
         {
             foreach (var row in Csv.Read(f))
             {
+                if (!InScope(Csv.Str(row, "Ticker"))) continue;
                 double D(string k) => Csv.Num(row, k);
                 string S(string k) => Csv.Str(row, k);
                 rows.Add((S("Ticker"), S("Side"), D("LimitPrice"), D("RestAsk"), D("EvCents"),
@@ -1047,6 +1119,7 @@ public static class Calibration
             foreach (string lf in Directory.GetFiles(dir, "EvFillLadder_*.csv").OrderBy(f => f))
                 foreach (var r in Csv.Read(lf))
                 {
+                    if (!InScope(Csv.Str(r, "Ticker"))) continue;
                     double fill = Csv.Num(r, "Filled"), walk = Csv.Num(r, "WalkCents");
                     string v = Csv.Str(r, "Verdict");
                     if (v.Length == 0 || double.IsNaN(fill) || fill <= 0 || double.IsNaN(walk)) continue;
@@ -1221,6 +1294,7 @@ public static class Calibration
             foreach (string lf in Directory.GetFiles(dir, "EvFillLadder_*.csv"))
                 foreach (var lr in Csv.Read(lf))
                 {
+                    if (!InScope(Csv.Str(lr, "Ticker"))) continue;
                     string oid = Csv.Str(lr, "OrderId");
                     string paid = Csv.Str(lr, "PaidLadder");
                     if (oid.Length == 0 || paid.Length == 0) continue;
@@ -1947,6 +2021,7 @@ public static class Calibration
         foreach (string f in Directory.GetFiles(dir, livePrefix + "_*.csv"))
             foreach (var r in Csv.Read(f))
             {
+                if (!InScope(Csv.Str(r, "Ticker"))) continue;
                 double n = Csv.Num(r, "FillCount");
                 if (double.IsNaN(n) || n < 1) continue;
                 double px = Csv.Num(r, "AvgFillPrice");
@@ -2010,6 +2085,7 @@ public static class Calibration
         foreach (string f in Directory.GetFiles(dir, livePrefix + "_*.csv").OrderBy(x => x))
             foreach (var r in Csv.Read(f))
             {
+                if (!InScope(Csv.Str(r, "Ticker"))) continue;
                 double n = Csv.Num(r, "FillCount"), d = Csv.Num(r, "DepthToLimit");
                 if (double.IsNaN(n) || n < 1 || double.IsNaN(d) || d <= 0) continue;
                 string tk = Csv.Str(r, "Ticker"), sd = Csv.Str(r, "Side");
@@ -2555,6 +2631,19 @@ public static class Calibration
         var sides = TakeableSides(all.Where(o => !retired.Contains(Sport(o.Ticker))), takeCtr);
         if (sides.Count == 0)
             Console.WriteLine("   (no settled signal carries a depth reading yet)");
+        void Row4f(string sport, string label, List<Obs> l, bool quoted = false)
+        {
+            int n = l.Count, wins = l.Count(o => o.Won!.Value);
+            double exp = l.Sum(o => o.PUsed), sdW = Math.Sqrt(l.Sum(o => o.PUsed * (1 - o.PUsed)));
+            var pl = l.Select(o => (o.Won!.Value ? 1.0 : 0.0) - o.Cost).ToList();
+            double mean = pl.Average();
+            double sd = n > 1 ? Math.Sqrt(pl.Sum(x => Math.Pow(x - mean, 2)) / (n - 1)) : 0;
+            Console.WriteLine($"   {sport,-11} {label,-27} n={n,4}  won {wins,4} vs {exp,6:0.0} expected "
+                            + $"({(sdW > 0 ? (wins - exp) / sdW : 0):+0.0;-0.0} SD)  edge/ctr {mean:+0.0000;-0.0000}  "
+                            + $"t={(sd > 0 ? mean / (sd / Math.Sqrt(n)) : 0):+0.00;-0.00}"
+                            + (quoted ? $"   (bought at {100 * l.Average(o => o.Ev):+0.00;-0.00}c)" : ""));
+        }
+        double band4f = GapBandCents;
         foreach (var sport in sides.GroupBy(x => Sport(x.O.Ticker)).OrderByDescending(g => g.Count()))
             foreach (var (cls, label) in new[] { ("deep", $"deep (>= {takeCtr} at our limit)"),
                                                  ("thin", $"thin (1-{takeCtr - 1})"),
@@ -2562,14 +2651,16 @@ public static class Calibration
             {
                 var l = sport.Where(x => x.Cls == cls).Select(x => x.O).ToList();
                 if (l.Count == 0) continue;
-                int n = l.Count, wins = l.Count(o => o.Won!.Value);
-                double exp = l.Sum(o => o.PUsed), sdW = Math.Sqrt(l.Sum(o => o.PUsed * (1 - o.PUsed)));
-                var pl = l.Select(o => (o.Won!.Value ? 1.0 : 0.0) - o.Cost).ToList();
-                double mean = pl.Average();
-                double sd = n > 1 ? Math.Sqrt(pl.Sum(x => Math.Pow(x - mean, 2)) / (n - 1)) : 0;
-                Console.WriteLine($"   {sport.Key,-11} {label,-27} n={n,4}  won {wins,4} vs {exp,6:0.0} expected "
-                                + $"({(sdW > 0 ? (wins - exp) / sdW : 0):+0.0;-0.0} SD)  edge/ctr {mean:+0.0000;-0.0000}  "
-                                + $"t={(sd > 0 ? mean / (sd / Math.Sqrt(n)) : 0):+0.00;-0.00}");
+                Row4f(sport.Key, label, l);
+                if (cls != "deep") continue;
+                // DEEP BY GAP BAND (see GapBandCents), at the signal each side is graded on. "won vs expected" is
+                // the curse on its own - a band that settles under its P_true was bought on a price too high -
+                // and "bought at" shows how much edge that band had to lose.
+                foreach (var (core, bl) in new[] { (true, $"  deep, gap <{band4f:0}c"), (false, $"  deep, gap >={band4f:0}c") })
+                {
+                    var lb = l.Where(o => CoreGap(100 * o.Ev) == core).ToList();
+                    if (lb.Count > 0) Row4f(sport.Key, bl, lb, quoted: true);
+                }
             }
         Console.WriteLine("   DEEP is the strategy: it is what an order would have filled. DEEP under expectation while NONE");
         Console.WriteLine("   is over it is adverse selection - the edge sits in what nobody could buy. Read it per sport.");
@@ -2866,9 +2957,84 @@ public static class Calibration
                                 + "the radar below is unaffected");
             }
         }
+        // A shadow pipeline has no fills, so the radar below prints nothing for it - this is its ORACLE DRIFT line.
+        if (followPrefix.Contains("Shadow", StringComparison.Ordinal))
+        {
+            try { SignalDrift(Directory.GetCurrentDirectory(), followPrefix); }
+            catch (Exception ex)
+            {
+                Console.WriteLine();
+                Console.WriteLine($"11. ORACLE DRIFT ON SIGNALS  - could not be computed ({ex.GetType().Name}: {ex.Message})");
+            }
+        }
         // THE RADAR IS LAST, ALWAYS. It is the health check; anything printed after it would be the
         // thing the eye lands on instead. New sections go ABOVE this line.
         RollingRadar(Directory.GetCurrentDirectory(), followPrefix, livePrefix, settled);
+    }
+
+    /// <summary>
+    /// Section 11 for the SHADOW pipeline: the radar's ORACLE DRIFT / CUSHION line, which needs fills, computed on
+    /// SIGNALS instead - per sport, pooled and per gap band (see <see cref="GapBandCents"/>). The population is the
+    /// radar's own drift population: first SIGNAL per ticker+side, its T+300 reading taken by the signal path's
+    /// rules (open and fresh); a refused reading leaves the side out rather than swapping in a later signal. What
+    /// differs is "bought": the tennis radar takes it from real fills, here nothing was bought, so it is each
+    /// signal's quoted edge at the REST ask - no walk - and the cushion is paired per signal (bought + drift).
+    /// </summary>
+    private static void SignalDrift(string dir, string followPrefix)
+    {
+        var first = new Dictionary<string, FollowRow>(StringComparer.Ordinal);
+        foreach (var r in ReportCache.LoadFollowUps(dir, followPrefix))
+        {
+            if (r.Decision != "SIGNAL" || double.IsNaN(r.AgeSec) || Math.Abs(r.AgeSec - 300) > 30) continue;
+            if (!double.IsFinite(r.EntryPTrue) || r.EntryAt == DateTime.MinValue) continue;
+            string key = r.Ticker + "|" + r.Side;
+            if (first.TryGetValue(key, out var have) && have.EntryAt <= r.EntryAt) continue;
+            first[key] = r;
+        }
+        var clean = first.Values.Where(r => r.PinState == "open" && double.IsFinite(r.NowPTrue)
+                                            && double.IsFinite(r.EntryEvCents)).ToList();
+        Console.WriteLine();
+        Console.WriteLine("11. ORACLE DRIFT ON SIGNALS  (the radar's winner's-curse line, for a pipeline with no fills)");
+        if (clean.Count == 0)
+        {
+            Console.WriteLine("   no first signal has a clean T+300 Pinnacle reading yet");
+            return;
+        }
+        Console.WriteLine($"   first SIGNAL per side; drift = Pinnacle's own move by T+300 ({first.Count - clean.Count} side(s) left out: "
+                        + "reading refused or older than the clean rule).");
+        Console.WriteLine("   bought = the quoted edge at the REST ask (nothing was bought, so no walk); cushion = bought + drift, per signal.");
+
+        static (int N, double M, double Se) MeanSe(List<double> v)
+        {
+            if (v.Count < 2) return (v.Count, v.Count == 1 ? v[0] : double.NaN, double.NaN);
+            double m = v.Average();
+            return (v.Count, m, Math.Sqrt(v.Sum(x => (x - m) * (x - m)) / (v.Count - 1)) / Math.Sqrt(v.Count));
+        }
+        double band = GapBandCents;
+        foreach (var sp in clean.GroupBy(r => Sport(r.Ticker)).OrderByDescending(g => g.Count()))
+            foreach (var (lab, keep) in new (string, Func<FollowRow, bool>)[]
+                     {
+                         ("all", _ => true),
+                         ($"gap <{band:0}c", r => CoreGap(r.EntryEvCents) == true),
+                         ($"gap >={band:0}c", r => CoreGap(r.EntryEvCents) == false),
+                     })
+            {
+                var l = sp.Where(keep).ToList();
+                if (l.Count == 0) continue;
+                var (n, dm, ds) = MeanSe(l.Select(r => (r.NowPTrue - r.EntryPTrue) * 100).ToList());
+                var (_, cm, cs) = MeanSe(l.Select(r => r.EntryEvCents + (r.NowPTrue - r.EntryPTrue) * 100).ToList());
+                double t = cs > 0 ? cm / cs : 0;
+                // the radar's colours: red = cushion negative at 2 sigma, yellow = negative at all
+                Console.ForegroundColor = cs > 0 && cm + 2 * cs < 0 ? ConsoleColor.Red
+                                        : cm < 0 ? ConsoleColor.Yellow : ConsoleColor.Green;
+                static string Pm(double se) => double.IsNaN(se) ? " n/a" : se.ToString("0.00", CultureInfo.InvariantCulture);
+                Console.WriteLine($"   {(lab == "all" ? sp.Key : ""),-11} {lab,-9} n={n,4}  drift {dm:+0.00;-0.00}c +/-{Pm(ds)}   "
+                                + $"bought {l.Average(r => r.EntryEvCents):+0.00;-0.00}c   cushion {cm:+0.00;-0.00}c +/-{Pm(cs)} (t={t:+0.0;-0.0})"
+                                + (lab == "all" ? $"   since {l.Min(r => r.EntryAt):MM-dd}" : ""));
+                Console.ResetColor();
+            }
+        Console.WriteLine("   Read it like the radar's line: a cushion below zero means the winner's curse eats the whole edge");
+        Console.WriteLine("   we would have bought. The gap bands keep a few wide gaps from masking the core band.");
     }
 
     /// <summary>
@@ -2954,6 +3120,7 @@ public static class Calibration
         foreach (var f in files)
             foreach (var r in Csv.Read(f))
             {
+                if (!InScope(Csv.Str(r, "Ticker"))) continue;
                 if (Csv.Str(r, "Status") == "fee-rounding-negative") { feeSkips++; continue; }
                 double fill = Csv.Num(r, "FillCount");
                 if (fill <= 0) continue;

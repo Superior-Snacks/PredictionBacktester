@@ -60,24 +60,50 @@ def grab(text: str, pattern: str, group: int = 0) -> str:
     return (clean(m.group(group)).strip() if m else "")
 
 
+_RADAR_LINE = re.compile(r"^\s*\[(OK|WATCH|STOP)\]\s+(VELOCITY|ADVERSE SEL\.|CONVERGENCE|ORACLE DRIFT|SETTLEMENT|VERDICT)\s+(.*)$")
+# Section 11's gap-band breakdown of ORACLE DRIFT (2026-10-27): lower-case tags, so it is shown but never votes.
+_RADAR_BAND = re.compile(r"^\s*\[(ok|watch|stop)\]\s+(gap <\d+c|gap >=\d+c)\s+(.*)$")
+_ICON = {"OK": "🟢", "WATCH": "🟡", "STOP": "🔴"}
+
+
+def radar_rows(out: str) -> list[tuple[bool, str, str, str]]:
+    """The radar's lines in report order as (is_band, TAG, name, rest). Band lines only count right under a
+    radar line, and they never set the alarm: the five upper-case lines and the verdict carry it."""
+    rows = []
+    for ln in out.splitlines():
+        m = _RADAR_LINE.match(ln)
+        if m:
+            rows.append((False, m.group(1), m.group(2), m.group(3)))
+            continue
+        m = _RADAR_BAND.match(ln)
+        if m and rows:
+            rows.append((True, m.group(1).upper(), m.group(2), m.group(3)))
+    return rows
+
+
+def radar_line(is_band: bool, tag: str, name: str, rest: str) -> str:
+    rest = clean(rest)
+    rest = re.sub(r"\s*\((?:lifetime|red =|n=\d+; green|n=\d+[^)]*; red|green >=)[^)]*\)\s*$", "", rest)
+    if is_band:
+        return f"      ↳ {_ICON[tag]} `{name:<9} {rest.strip()}`"
+    return f"{_ICON[tag]} `{name:<13} {rest.strip()}`"
+
+
 def radar_only(out: str) -> tuple[str, bool]:
     """Just the rolling-health block: the five [OK|WATCH|STOP] lines and the verdict, as one short message.
     This is the DEFAULT per-block post (PINNACLE_ON_CLOSE_CMD ... --radar): the two-day health check, and
     nothing else, so the channel carries live/dark, errors, the radar, and one full report a day."""
     bad = False
-    radar = re.findall(r"^\s*\[(OK|WATCH|STOP)\]\s+(VELOCITY|ADVERSE SEL\.|CONVERGENCE|ORACLE DRIFT|SETTLEMENT|VERDICT)\s+(.*)$", out, re.M)
-    if not radar:
+    radar = radar_rows(out)
+    if not any(not band for band, *_ in radar):
         n = grab(out, r"^\s*(\d+) fill\(s\) settled.*$")
         return ("📡 **EV radar** — not enough settled fills for the rolling window yet"
                 + (f" (`{clean(n).strip()}`)" if n else "") + ".", False)
     L = [f"📡 **EV radar** (last 200 fills) · {dt.datetime.now():%a %H:%M}"]
-    for tag, name, rest in radar:
-        rest = clean(rest)
-        rest = re.sub(r"\s*\((?:lifetime|red =|n=\d+; green|n=\d+[^)]*; red|green >=)[^)]*\)\s*$", "", rest)
-        icon = {"OK": "🟢", "WATCH": "🟡", "STOP": "🔴"}[tag]
-        if tag == "STOP":
+    for is_band, tag, name, rest in radar:
+        if tag == "STOP" and not is_band:
             bad = True
-        L.append(f"{icon} `{name:<13} {rest.strip()}`")
+        L.append(radar_line(is_band, tag, name, rest))
     fails = grab(out, r"^\[RESOLVE\] \d+ fetched.*?(\d+) failed", 1)
     if fails and fails != "0":
         bad = True
@@ -186,16 +212,13 @@ def digest(out: str) -> tuple[str, bool]:
     # tagged [OK]/[WATCH]/[STOP]. It goes at the top because it is the only thing the reader needs when
     # the answer is "all green", and the thing they need most when it is not. Tags become emoji here so
     # the colour survives Discord. A [STOP] anywhere marks the whole digest alarming.
-    radar = re.findall(r"^\s*\[(OK|WATCH|STOP)\]\s+(VELOCITY|ADVERSE SEL\.|CONVERGENCE|ORACLE DRIFT|SETTLEMENT|VERDICT)\s+(.*)$", out, re.M)
-    if radar:
+    radar = radar_rows(out)
+    if any(not band for band, *_ in radar):
         L.append("**RADAR** (last 200 fills)")
-        for tag, name, rest in radar:
-            rest = clean(rest)
-            rest = re.sub(r"\s*\((?:lifetime|red =|n=\d+; green|n=\d+[^)]*; red|green >=)[^)]*\)\s*$", "", rest)   # drop the legend
-            icon = {"OK": "🟢", "WATCH": "🟡", "STOP": "🔴"}[tag]
-            if tag == "STOP":
+        for is_band, tag, name, rest in radar:
+            if tag == "STOP" and not is_band:
                 bad = True
-            L.append(f"{icon} `{name:<13} {rest.strip()}`")
+            L.append(radar_line(is_band, tag, name, rest))
         L.append("")
 
     orient = grab(out, r"^\s*PAIR ORIENTATION: .*$")

@@ -1194,6 +1194,26 @@ public static class SelfTest
                       "follow-up rows load typed with the raw EntryUtc kept for the string join",
                       fu.Count == 1 ? fu[0].ToString() : $"count={fu.Count}");
                 Check(ReferenceEquals(fu, ReportCache.LoadFollowUps(dir, "EvFollowUp")), "follow-ups are loaded once per process");
+                Check(fu.Count == 1 && fu[0].EntryEvCents == 1.2,
+                      "the follow-up row carries the gap bought (EntryEvCents) the band splits file it by",
+                      fu.Count == 1 ? $"EntryEvCents={fu[0].EntryEvCents}" : "");
+                Check(Calibration.CoreGap(2.99) == true && Calibration.CoreGap(3.0) == false
+                      && Calibration.CoreGap(double.NaN) is null,
+                      "gap bands: under 3c is core, 3c and above is wide, no gap on record is neither");
+                // --sport: the filter narrows every read, and an unset filter is every sport, exactly as before
+                bool allIn = Calibration.InScope("KXATPMATCH-X") && Calibration.InScope("KXEUROLEAGUEGAME-X");
+                Calibration.SportFilter = "basketball";
+                try
+                {
+                    Check(allIn && Calibration.InScope("KXEUROLEAGUEGAME-26OCT27X-Y") && !Calibration.InScope("KXATPMATCH-26OCT27X-Y")
+                          && !Calibration.InScope("KXNFLGAME-26OCT27X-Y"),
+                          "--sport basketball keeps basketball tickers only; no filter keeps everything");
+                    var fuB = ReportCache.LoadFollowUps(dir, "EvFollowUp");
+                    Check(fuB.Count == 0 && !ReferenceEquals(fuB, fu),
+                          "a sport-filtered load is its own view (the non-basketball row is gone), never the unfiltered memo",
+                          $"count={fuB.Count}");
+                }
+                finally { Calibration.SportFilter = null; }
             }
             finally { try { Directory.Delete(dir, true); } catch { } }
         }

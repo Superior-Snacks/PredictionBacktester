@@ -8,10 +8,12 @@ namespace KalshiEvBot;
 /// oracle's own price at the checkpoint, on our side - the radar's ORACLE DRIFT line. <c>PinState</c> is
 /// how that reading was taken: "open" = by the signal path's rules (rows from 2026-10-05 on), any other
 /// value = refused (NowPTrue blank), "" = a LEGACY row from before the rule, whose NowPTrue may be a
-/// suspended leg or the frozen pre-match line.</summary>
+/// suspended leg or the frozen pre-match line. <c>EntryEvCents</c> is the GAP we bought - the edge after the
+/// fee at entry, in cents - which sections 9 and 11 split their bands on.</summary>
 public sealed record FollowRow(string Ticker, string Side, string Decision, string EntryUtc, DateTime EntryAt,
                                double AgeSec, double EntryAsk, double EntryPTrue, double NowAsk, double NowBid,
-                               double EntryDepth, double NowPTrue = double.NaN, string PinState = "");
+                               double EntryDepth, double NowPTrue = double.NaN, string PinState = "",
+                               double EntryEvCents = double.NaN);
 
 /// <summary>
 /// Per-file typed cache for the report's inputs.
@@ -42,8 +44,8 @@ public static class ReportCache
     private const string Magic = "EVCACHE";
     /// <summary>The follow-up cache's header tag. Bump ITS suffix when FollowRow's fields change: that
     /// re-parses the follow-ups only, not the gigabyte of telemetry a Version bump would. v2 = NowPTrue,
-    /// v3 = PinState.</summary>
-    private const string FollowKind = "follow.v3";
+    /// v3 = PinState, v4 = EntryEvCents.</summary>
+    private const string FollowKind = "follow.v4";
 
     public static int Hits, Misses;
     /// <summary>Follow-up rows whose entry fell in Kalshi's maintenance window, set aside at load time
@@ -156,7 +158,7 @@ public static class ReportCache
     /// process however many sections ask - the three that read it used to parse all of it each.</summary>
     public static List<FollowRow> LoadFollowUps(string dir, string prefix)
     {
-        string key = dir + "|" + prefix;
+        string key = dir + "|" + prefix + "|" + (Calibration.SportFilter ?? "*");
         if (_followMemo.TryGetValue(key, out var memo)) return memo;
         var all = new List<FollowRow>();
         foreach (string f in Directory.GetFiles(dir, prefix + "_*.csv").OrderBy(f => f))
@@ -165,6 +167,8 @@ public static class ReportCache
         int before = all.Count;
         all.RemoveAll(r => Calibration.InKalshiMaintenance(r.EntryAt));
         FollowMaintenanceDropped += before - all.Count;
+        // --sport: one sport's follow-ups only (the cache stays whole; this is a load-time view of it)
+        if (Calibration.SportFilter is not null) all.RemoveAll(r => !Calibration.InScope(r.Ticker));
         _followMemo[key] = all;
         return all;
     }
@@ -189,7 +193,7 @@ public static class ReportCache
             rows.Add(new FollowRow(Csv.Str(r, "Ticker"), Csv.Str(r, "Side"), Csv.Str(r, "Decision"), eu, at,
                                    Csv.Num(r, "AgeSec"), Csv.Num(r, "EntryAsk"), Csv.Num(r, "EntryPTrue"),
                                    Csv.Num(r, "NowAsk"), Csv.Num(r, "NowBid"), Csv.Num(r, "EntryDepth"),
-                                   Csv.Num(r, "NowPTrue"), Csv.Str(r, "PinState")));
+                                   Csv.Num(r, "NowPTrue"), Csv.Str(r, "PinState"), Csv.Num(r, "EntryEvCents")));
         }
         ParseSeconds += sw.Elapsed.TotalSeconds;
         TryWriteFollow(cp, fi, rows);
@@ -214,7 +218,7 @@ public static class ReportCache
                 var at = DateTime.FromBinary(r.ReadInt64());
                 rows.Add(new FollowRow(ticker, side, dec, eu, at, r.ReadDouble(), r.ReadDouble(), r.ReadDouble(),
                                        r.ReadDouble(), r.ReadDouble(), r.ReadDouble(), r.ReadDouble(),
-                                       ReadStr(r, tbl)));
+                                       ReadStr(r, tbl), r.ReadDouble()));
             }
             return true;
         }
@@ -239,6 +243,7 @@ public static class ReportCache
                     w.Write(o.AgeSec); w.Write(o.EntryAsk); w.Write(o.EntryPTrue);
                     w.Write(o.NowAsk); w.Write(o.NowBid); w.Write(o.EntryDepth); w.Write(o.NowPTrue);
                     WriteStr(w, o.PinState ?? "", tbl);
+                    w.Write(o.EntryEvCents);
                 }
             }
             File.Move(tmp, cp, overwrite: true);

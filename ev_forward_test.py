@@ -141,6 +141,20 @@ def main() -> int:
         print(f"      gap gradient         {b:+.2f} +/-{se:.2f} per cent of gap (t={tt:+.1f})   "
               f"(before 10-20 {grad['before_slope']:+.2f}, streak {grad['streak_slope']:+.2f})")
         print(f"      Pinnacle-only 60s->5m {fmt(po)}   (normal {ponly['normal_cents']:+.1f}c)")
+        # THE TWO GAP BANDS - DISPLAY ONLY (added 2026-10-27, after registration; no rule reads it). Wide gaps
+        # carry a bigger bought edge AND a bigger give-back, so pooled they can mask the core band. Cut at the
+        # registered 3c line, under vs at-or-above (a gap of exactly 3.00c does not occur: P_true is continuous).
+        cut = gap_rule["skip_gap_above_cents"]
+        for i, (lab, grp) in enumerate(((f"gap <{cut:g}c ", [x for x in sample if x[1] < cut]),
+                                        (f"gap >={cut:g}c", [x for x in sample if x[1] >= cut]))):
+            head = "by gap band" if i == 0 else ""
+            if len(grp) < 2:
+                print(f"      {head:<21}{lab}  n={len(grp)}")
+                continue
+            gm, gs = mean_se([x[2] for x in grp])
+            cm, cs = mean_se([x[1] + x[2] for x in grp])
+            print(f"      {head:<21}{lab}  give-back {gm:+.2f} +/-{gs:.2f}   bought {mean_se([x[1] for x in grp])[0]:+.2f}c"
+                  f" -> cushion {cm:+.2f} +/-{cs:.2f} (n={len(grp)})")
         cl, sl, nl = cushion(lo)
         ch, sh, nh = cushion(hi)
         print(f"      gap rule (skip > {gap_rule['skip_gap_above_cents']:.0f}c): cushion gap<=3c {cl:+.2f} +/-{sl:.2f} (n={nl})   "

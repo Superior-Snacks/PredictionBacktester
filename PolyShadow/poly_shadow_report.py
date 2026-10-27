@@ -12,10 +12,14 @@ REST ask plus Polymarket's taker fee (rate x p(1-p), from each market's own fee 
                 match: did a POLY_ORDER_SHARES order still fill (at the seen price / worse / partly / not at all),
                 and the edge at the price it filled. "filled" lines grade each side at the first signal whose
                 order would have filled - an order retried after every miss.
-  CONVERGENCE   T+20: did Polymarket's ask move toward Pinnacle's price (came-to-us %)?
+  CONVERGENCE   the bot's section 9 FILLABLE lines: T+20/T+60/T+300 ask move toward Pinnacle's price, came-to-us %
   ORACLE DRIFT  Pinnacle's own P_true change by T+300 (clean 'open' readings); CUSHION = edge + drift
   MATCH-NEUTRAL T+60 -> T+300: Pinnacle's move minus Polymarket's mid move (match events cancel)
   SETTLEMENT    edge after fees at settlement, and wins vs the sum of P_true
+
+GAP BANDS (as the bot's resolve, sections 9/11/4f): CONVERGENCE, ORACLE DRIFT/CUSHION and the deep/filled settlement
+rows are printed pooled and then split at EV_GAP_BAND_CENTS (3c) - under it the core band, at or above it the wide
+gaps - so a few wide gaps cannot mask the core band. The gap is the edge bought after Polymarket's fee.
 
 Settlement comes from Polymarket itself (Gamma /markets/{id}: outcomePrices once the market is closed), cached in
 PolyShadow/data/poly_resolutions.json. A tennis walkover resolves 50-50 there and is graded at 0.5.
@@ -129,6 +133,14 @@ def main():
     args = ap.parse_args()
     cfg = Cfg(read_env())
     data = cfg.data
+    cut = cfg.gap_band
+
+    def bands(gap):
+        """(label, keep) for pooled, under the gap-band cut, and at or above it - the bot's resolve split (sections 9,
+        11, 4f). `gap` maps a row to its gap bought in cents; a row with no gap on record is in the pooled line only."""
+        return (("all", lambda r: True),
+                (f"gap <{cut:g}c", lambda r: gap(r) == gap(r) and gap(r) < cut),
+                (f"gap >={cut:g}c", lambda r: gap(r) == gap(r) and gap(r) >= cut))
 
     tel = load(data, "PolyShadowTelemetry", args.since)
     fu = load(data, "PolyShadowFollowUp", args.since)
@@ -214,38 +226,40 @@ def main():
         print(f"                 sides that would have FILLED (an order retried at each later signal): "
               f"{n_taken} of {len(measured)}"
               + (f"   ({len(ks) - len(measured)} signalled before the delay re-check existed)" if len(measured) < len(ks) else ""))
-        # ── CONVERGENCE ──
-        conv, came = [], [0, 0]
-        for k in ks:
-            f = at(grade[k], 20, 4)
-            if not f or D(f, "NowAsk") != D(f, "NowAsk"):
-                continue
-            mv = (D(f, "NowAsk") - D(f, "EntryAsk")) * 100
-            conv.append(mv)
-            came[0] += mv > 0.5
-            came[1] += 1
-        print(f"   CONVERGENCE   T+20 ask move toward P_true {show(conv)}"
-              + (f", came to us {100 * came[0] / came[1]:.0f}%" if came[1] else ""))
-        # ── ORACLE DRIFT + CUSHION ──
-        drift, cush = [], []
-        for k in ks:
-            f = at(grade[k], 300, 30)
-            if not f or f["PinState"] != "open" or D(f, "NowPTrue") != D(f, "NowPTrue"):
-                continue
-            d = (D(f, "NowPTrue") - D(f, "EntryPTrue")) * 100
-            drift.append(d)
-            cush.append(D(grade[k], "Ev") * 100 + d)
-        print(f"   ORACLE DRIFT  Pinnacle T+300 {show(drift)}")
-        print(f"   CUSHION       edge + drift   {show(cush)}")
-        # as FILLED: the price actually paid after the delay, plus the same drift from the decision's P_true
-        cush_f = []
-        for k in ks:
-            r = taken[k]
-            f = at(r, 300, 30) if r else None
-            if not f or f["PinState"] != "open" or D(f, "NowPTrue") != D(f, "NowPTrue"):
-                continue
-            cush_f.append(D(r, "DelayedEvAtEntryP") * 100 + (D(f, "NowPTrue") - D(f, "EntryPTrue")) * 100)
-        print(f"                 as filled      {show(cush_f)}   (the price paid after the taker delay)")
+        # ── CONVERGENCE ── the bot's section 9 FILLABLE lines: first SIGNAL observation per side at each checkpoint,
+        # the book showing depth at our limit at entry; ask move toward P_true; pooled and per gap band
+        print("   CONVERGENCE   fillable signals, ask move toward P_true (first per side per checkpoint)")
+        for cp in (20, 60, 300):
+            firsts = {}
+            for r in fu:
+                if (r["Sport"] != sp or r["Decision"] != "SIGNAL" or round(D(r, "AgeSec")) != cp
+                        or not D(r, "EntryDepth") > 0 or D(r, "NowAsk") != D(r, "NowAsk")):
+                    continue
+                k = (r["Ticker"], r["Side"])
+                if k not in firsts or r["EntryUtc"] < firsts[k]["EntryUtc"]:
+                    firsts[k] = r
+            for lab, keep in bands(lambda r: D(r, "EntryEvCents")):
+                mv = [(D(r, "NowAsk") - D(r, "EntryAsk")) * 100 for r in firsts.values() if keep(r)]
+                moved = [x for x in mv if abs(x) > 1e-9]
+                if mv:
+                    print(f"                 T+{cp:<4}{lab:10}{show(mv)}"
+                          + (f"   came to us {100 * sum(x > 0 for x in moved) / len(moved):.0f}%" if moved else ""))
+        # ── ORACLE DRIFT + CUSHION ── per side at its graded signal; "as filled" = the price paid after the taker
+        # delay, plus the same drift from the decision's P_true. Pooled and per gap band (the side's own gap).
+        print("   ORACLE DRIFT  Pinnacle's own move by T+300; CUSHION = edge + drift")
+        for lab, keep in bands(lambda r: D(r, "Ev") * 100):
+            drift, cush, cush_f = [], [], []
+            for k in ks:
+                f = at(grade[k], 300, 30) if keep(grade[k]) else None
+                if f and f["PinState"] == "open" and D(f, "NowPTrue") == D(f, "NowPTrue"):
+                    d = (D(f, "NowPTrue") - D(f, "EntryPTrue")) * 100
+                    drift.append(d)
+                    cush.append(D(grade[k], "Ev") * 100 + d)
+                r = taken[k]
+                f = at(r, 300, 30) if r and keep(r) else None
+                if f and f["PinState"] == "open" and D(f, "NowPTrue") == D(f, "NowPTrue"):
+                    cush_f.append(D(r, "DelayedEvAtEntryP") * 100 + (D(f, "NowPTrue") - D(f, "EntryPTrue")) * 100)
+            print(f"                 {lab:10}drift {show(drift)}   cushion {show(cush)}   as filled {show(cush_f)}")
         # ── MATCH-NEUTRAL ──
         dp, dk, dd = [], [], []
         for k in ks:
@@ -269,40 +283,39 @@ def main():
         mk_assets[r["MarketId"]].add(r["AssetId"])
     res = resolutions(mk_assets, data, not args.no_api)
     print("\nSETTLEMENT (Polymarket's own resolution; walkovers 50-50 = 0.5)")
-    for sp in sorted({v[0]["Sport"] for v in sides.values()}):
-        ks = [k for k in sides if sides[k][0]["Sport"] == sp]
-        for label, keep in (("all", ks), ("deep", [k for k in ks if k in deep_k])):
-            pnl, won, exp, var, n = [], 0.0, 0.0, 0.0, 0
-            for k in keep:
-                r = grade[k]
-                v = res.get(r["AssetId"])
-                if v is None:
-                    continue
-                cost = D(r, "RestAsk") + D(r, "FeePerShare")
-                pnl.append((v - cost) * 100)
-                p = D(r, "PTrueUsed")
-                won += v
-                exp += p
-                var += p * (1 - p)
-                n += 1
-            pending = len(keep) - n
-            line = f"   {sp:11} {label:6} edge after fees {show(pnl)}"
-            if n:
-                line += f"   won {won:.1f} vs P_true {exp:.1f} ({(won - exp) / math.sqrt(var):+.1f} SD)" if var > 0 else ""
-            print(line + (f"   [{pending} not settled yet]" if pending else ""))
-        # the Polymarket-real line: only sides an order would have FILLED after the delay, at the price it paid
-        pnl, pending = [], 0
-        for k in ks:
-            r = taken[k]
-            if r is None:
-                continue
+    def settle_line(sp, label, rows, cost_of, note=""):
+        """One settlement row: edge after fees per share, wins vs P_true, and how many are still open."""
+        pnl, won, exp, var, n = [], 0.0, 0.0, 0.0, 0
+        for r in rows:
             v = res.get(r["AssetId"])
             if v is None:
-                pending += 1
                 continue
-            pnl.append((v - D(r, "DelayedVwap") - D(r, "DelayedFeePerShare")) * 100)
-        print(f"   {sp:11} {'filled':6} edge after fees {show(pnl)}   (at the post-delay fill price)"
-              + (f"   [{pending} not settled yet]" if pending else ""))
+            pnl.append((v - cost_of(r)) * 100)
+            p = D(r, "PTrueUsed")
+            won += v
+            exp += p
+            var += p * (1 - p)
+            n += 1
+        pending = len(rows) - n
+        line = f"   {sp:11} {label:18} edge after fees {show(pnl)}"
+        if n and var > 0:
+            line += f"   won {won:.1f} vs P_true {exp:.1f} ({(won - exp) / math.sqrt(var):+.1f} SD)"
+        print(line + note + (f"   [{pending} not settled yet]" if pending else ""))
+
+    at_ask = lambda r: D(r, "RestAsk") + D(r, "FeePerShare")
+    at_fill = lambda r: D(r, "DelayedVwap") + D(r, "DelayedFeePerShare")
+    for sp in sorted({v[0]["Sport"] for v in sides.values()}):
+        ks = [k for k in sides if sides[k][0]["Sport"] == sp]
+        settle_line(sp, "all", [grade[k] for k in ks], at_ask)
+        # DEEP and FILLED per gap band (the bot's 4f split): have the wide gaps paid what they quoted?
+        for lab, keep in bands(lambda r: D(r, "Ev") * 100):
+            settle_line(sp, "deep" if lab == "all" else f"  deep, {lab}",
+                        [grade[k] for k in ks if k in deep_k and keep(grade[k])], at_ask)
+        # the Polymarket-real lines: only sides an order would have FILLED after the delay, at the price it paid
+        for lab, keep in bands(lambda r: D(r, "Ev") * 100):
+            settle_line(sp, "filled" if lab == "all" else f"  filled, {lab}",
+                        [taken[k] for k in ks if taken[k] is not None and keep(taken[k])], at_fill,
+                        "   (at the post-delay fill price)" if lab == "all" else "")
 
 
 if __name__ == "__main__":
