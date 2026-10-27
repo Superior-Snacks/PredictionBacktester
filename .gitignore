@@ -435,3 +435,6 @@ bia_place_trace.log
 # --resolve per-file parse cache (KalshiEvBot/ReportCache.cs); rebuilt on demand, safe to delete
 .evcache/
 EvFillLadder_*.csv
+
+# Polymarket shadow recorder output (PolyShadow/poly_shadow.py): telemetry, pairs, resolutions, logs
+PolyShadow/data/

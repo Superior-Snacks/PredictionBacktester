@@ -1,0 +1,309 @@
+#!/usr/bin/env python
+"""Polymarket shadow report - the tennis radar's lines, scored on what poly_shadow.py logged.
+
+Unit = one Polymarket outcome (first SIGNAL per market+outcome), as the bot's reports use the first signal per
+ticker+side; a "deep" side is graded at its first signal with >= 15 shares at the break-even limit. Prices are the
+REST ask plus Polymarket's taker fee (rate x p(1-p), from each market's own fee schedule).
+
+  COVERAGE      paired markets watched, in-play hours (5-min snapshots), signalled sides per in-play hour
+  DECISIONS     what the gates did with every candidate that cleared EV_MIN at REST
+  EDGE          bought edge at REST, and how far the WS book read from REST
+  TAKER DELAY   the book re-read one `secondsDelay` (1s) after the decision, when a taker order would really
+                match: did a POLY_ORDER_SHARES order still fill (at the seen price / worse / partly / not at all),
+                and the edge at the price it filled. "filled" lines grade each side at the first signal whose
+                order would have filled - an order retried after every miss.
+  CONVERGENCE   T+20: did Polymarket's ask move toward Pinnacle's price (came-to-us %)?
+  ORACLE DRIFT  Pinnacle's own P_true change by T+300 (clean 'open' readings); CUSHION = edge + drift
+  MATCH-NEUTRAL T+60 -> T+300: Pinnacle's move minus Polymarket's mid move (match events cancel)
+  SETTLEMENT    edge after fees at settlement, and wins vs the sum of P_true
+
+Settlement comes from Polymarket itself (Gamma /markets/{id}: outcomePrices once the market is closed), cached in
+PolyShadow/data/poly_resolutions.json. A tennis walkover resolves 50-50 there and is graded at 0.5.
+
+Usage: python PolyShadow/poly_shadow_report.py [--since 2026-10-27] [--sport tennis] [--no-api]
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+import glob
+import json
+import math
+import os
+import sys
+import time
+from collections import Counter, defaultdict
+from pathlib import Path
+
+import httpx
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from poly_shadow import GAMMA, Cfg, read_env  # noqa: E402  (same folder, same config)
+
+csv.field_size_limit(10 ** 9)
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+DEEP = 15.0
+FILLED = ("FULL_AT_SEEN", "FULL_WORSE", "PARTIAL")      # AfterDelay outcomes where the order got something
+
+
+def D(r, k):
+    try:
+        v = float(r.get(k) or "nan")
+        return v
+    except ValueError:
+        return float("nan")
+
+
+def load(data: Path, prefix: str, since: str) -> list[dict]:
+    out = []
+    for f in sorted(glob.glob(str(data / f"{prefix}_*.csv"))):
+        day = Path(f).stem.split("_")[1]
+        if since and day < since.replace("-", ""):
+            continue
+        with open(f, encoding="utf-8", newline="") as fh:
+            out += list(csv.DictReader(fh))
+    return out
+
+
+def stat(v):
+    v = [x for x in v if x == x]
+    n = len(v)
+    if n == 0:
+        return 0, float("nan"), float("nan")
+    m = sum(v) / n
+    se = math.sqrt(sum((x - m) ** 2 for x in v) / (n - 1)) / math.sqrt(n) if n > 1 else float("nan")
+    return n, m, se
+
+
+def show(v, unit="c") -> str:
+    n, m, se = stat(v)
+    if n == 0:
+        return "n=0"
+    t = m / se if se and se == se and se > 0 else float("nan")
+    return (f"{m:+6.2f}{unit} +/-{se:4.2f} (t={t:+.1f}, n={n})" if se == se else f"{m:+6.2f}{unit} (n={n})")
+
+
+def resolutions(markets: dict[str, list[str]], data: Path, use_api: bool) -> dict[str, float]:
+    """asset id -> settlement value (1, 0 or 0.5). Only FINAL prices are kept; an open market is asked again."""
+    path = data / "poly_resolutions.json"
+    cache = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    todo = [m for m in markets if m not in cache]
+    if use_api and todo:
+        with httpx.Client(headers={"User-Agent": "poly-shadow-report/1.0"}, timeout=20.0) as http:
+            for i, mid in enumerate(todo):
+                try:
+                    mk = http.get(f"{GAMMA}/markets/{mid}").json()
+                except Exception:
+                    continue
+                if not mk.get("closed"):
+                    continue
+                try:
+                    prices = [float(x) for x in json.loads(mk.get("outcomePrices") or "[]")]
+                    ids = ([str(x) for x in mk.get("positionIds") or []] if (mk.get("version") or "v1") == "v2"
+                           else [str(x) for x in json.loads(mk.get("clobTokenIds") or "[]")])
+                except (ValueError, TypeError):
+                    continue
+                final = len(prices) == len(ids) == 2 and (sorted(prices) in ([0.0, 1.0], [0.5, 0.5]))
+                if final:
+                    cache[mid] = dict(zip(ids, prices))
+                if i % 20 == 19:
+                    time.sleep(0.5)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(cache), encoding="utf-8")
+        os.replace(tmp, path)
+    out = {}
+    for mid, prices in cache.items():
+        out.update(prices)
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Polymarket shadow report")
+    ap.add_argument("--since", default="", help="first UTC day to include, e.g. 2026-10-27")
+    ap.add_argument("--sport", default="", help="only this sport (tennis, basketball, ...)")
+    ap.add_argument("--no-api", action="store_true", help="do not ask Polymarket for settlements")
+    args = ap.parse_args()
+    cfg = Cfg(read_env())
+    data = cfg.data
+
+    tel = load(data, "PolyShadowTelemetry", args.since)
+    fu = load(data, "PolyShadowFollowUp", args.since)
+    snap = load(data, "PolyShadowSnap", args.since)
+    if args.sport:
+        tel = [r for r in tel if r["Sport"] == args.sport]
+        fu = [r for r in fu if r["Sport"] == args.sport]
+        snap = [r for r in snap if r["Sport"] == args.sport]
+    if not tel and not snap:
+        print(f"No shadow data in {data} yet. Is poly_shadow.py running?")
+        return
+    days = sorted({r["Timestamp"][:10] for r in tel + snap})
+    print(f"POLYMARKET SHADOW  {days[0]} .. {days[-1]}   {len(tel)} candidate row(s), {len(fu)} follow-up row(s), "
+          f"{len(snap)} snapshot row(s)   gates: ev>={cfg.ev_min * 100:.2f}c band {cfg.min_price:.2f}-{cfg.max_price:.2f}")
+
+    # ── COVERAGE ──
+    print("\nCOVERAGE")
+    live_rows = Counter()
+    watched = defaultdict(set)
+    for r in snap:
+        watched[r["Sport"]].add(r["Ticker"])
+        if r["InPlay"] in ("1", "True", "true"):
+            live_rows[r["Sport"]] += 1
+    sig = [r for r in tel if r["Decision"] == "SIGNAL"]
+    sides = defaultdict(list)
+    for r in sorted(sig, key=lambda r: r["Timestamp"]):
+        sides[(r["Ticker"], r["Side"])].append(r)
+    for sp in sorted(set(watched) | {r["Sport"] for r in tel}):
+        # one snapshot row per OUTCOME every EV_SNAPSHOT_MIN, two outcomes per market
+        hours = live_rows[sp] / 2 * cfg.snapshot_min / 60
+        ns = sum(1 for k, v in sides.items() if v[0]["Sport"] == sp)
+        deep = sum(1 for k, v in sides.items() if v[0]["Sport"] == sp and any(D(x, "DepthToLimit") >= DEEP for x in v))
+        rate = f"{ns / hours:.2f}/in-play h" if hours > 0 else "n/a"
+        print(f"   {sp:11} {len(watched[sp]):4} market(s) watched, ~{hours:5.1f} in-play market-hours, "
+              f"{ns:4} signalled side(s) ({rate}), {deep} deep (>= {DEEP:.0f} shares at the limit)")
+
+    # ── DECISIONS ──
+    print("\nDECISIONS (every REST-checked candidate)")
+    dec = Counter((r["Sport"], r["Decision"]) for r in tel)
+    for sp in sorted({k[0] for k in dec}):
+        parts = sorted(((n, d) for (s, d), n in dec.items() if s == sp), reverse=True)
+        print(f"   {sp:11} " + ", ".join(f"{d} {n}" for n, d in parts))
+
+    # grade each side at its first deep signal, else its first signal (the bot's 4f convention)
+    grade = {k: next((r for r in v if D(r, "DepthToLimit") >= DEEP), v[0]) for k, v in sides.items()}
+    # ...and, Polymarket-real, at the first signal whose would-be order still FILLED one taker delay later - what an
+    # order retried after each miss would have bought, at the price it would have paid
+    taken = {k: next((r for r in v if r.get("AfterDelay") in FILLED), None) for k, v in sides.items()}
+    deep_k = {k for k, v in sides.items() if any(D(r, "DepthToLimit") >= DEEP for r in v)}
+    fu_by = defaultdict(dict)
+    for r in fu:
+        fu_by[(r["Ticker"], r["Side"], r["EntryUtc"][:19])][round(D(r, "AgeSec"))] = r
+
+    def at(r, age, tol):
+        rs = fu_by.get((r["Ticker"], r["Side"], r["Timestamp"][:19]), {})
+        c = [a for a in rs if abs(a - age) <= tol]
+        return rs[min(c, key=lambda a: abs(a - age))] if c else None
+
+    for sp in sorted({v[0]["Sport"] for v in sides.values()}):
+        ks = [k for k in sides if sides[k][0]["Sport"] == sp]
+        print(f"\n{sp.upper()} - {len(ks)} signalled side(s), {len([k for k in ks if k in deep_k])} deep")
+        # ── EDGE ──
+        print(f"   EDGE          bought (all)  {show([D(grade[k], 'Ev') * 100 for k in ks])}")
+        print(f"                 bought (deep) {show([D(grade[k], 'Ev') * 100 for k in ks if k in deep_k])}")
+        print(f"                 REST - WS ask {show([D(grade[k], 'WsRestGapCents') for k in ks])}   "
+              "(+ = the WS book read LOWER than REST, i.e. optimistic)")
+        # ── TAKER DELAY ── each side at the signal it is graded on, then: would a retrying order have filled?
+        ad = [grade[k] for k in ks if grade[k].get("AfterDelay") not in (None, "", "RECHECK_FAILED")]
+        if ad:
+            dist = Counter(r["AfterDelay"] for r in ad)
+            print(f"   TAKER DELAY   book re-read {D(ad[0], 'TakerDelaySec'):g}s after the decision: "
+                  + ", ".join(f"{s} {100 * dist[s] / len(ad):.0f}%" for s in
+                              ("FULL_AT_SEEN", "FULL_WORSE", "PARTIAL", "GONE", "NO_DELAY") if dist[s])
+                  + f"  (n={len(ad)})")
+            print(f"                 ask move in the delay   {show([D(r, 'DelayAskMoveCents') for r in ad])}")
+            fn, fd = stat([D(r, "FillSharesNow") for r in ad])[1], stat([D(r, "DelayedFillShares") for r in ad])[1]
+            print(f"                 {D(ad[0], 'OrderShares'):.0f}-share order: {fn:.1f} sh fillable with no delay "
+                  f"-> {fd:.1f} after it")
+            print(f"                 edge at the fill        {show([D(r, 'DelayedEvAtFillP') * 100 for r in ad if r['AfterDelay'] in FILLED])}"
+                  f"   (Pinnacle at fill time; as decided {show([D(r, 'Ev') * 100 for r in ad if r['AfterDelay'] in FILLED])})")
+        n_taken = sum(1 for k in ks if taken[k] is not None)
+        measured = [k for k in ks if any(r.get("AfterDelay") not in (None, "", "RECHECK_FAILED") for r in sides[k])]
+        print(f"                 sides that would have FILLED (an order retried at each later signal): "
+              f"{n_taken} of {len(measured)}"
+              + (f"   ({len(ks) - len(measured)} signalled before the delay re-check existed)" if len(measured) < len(ks) else ""))
+        # ── CONVERGENCE ──
+        conv, came = [], [0, 0]
+        for k in ks:
+            f = at(grade[k], 20, 4)
+            if not f or D(f, "NowAsk") != D(f, "NowAsk"):
+                continue
+            mv = (D(f, "NowAsk") - D(f, "EntryAsk")) * 100
+            conv.append(mv)
+            came[0] += mv > 0.5
+            came[1] += 1
+        print(f"   CONVERGENCE   T+20 ask move toward P_true {show(conv)}"
+              + (f", came to us {100 * came[0] / came[1]:.0f}%" if came[1] else ""))
+        # ── ORACLE DRIFT + CUSHION ──
+        drift, cush = [], []
+        for k in ks:
+            f = at(grade[k], 300, 30)
+            if not f or f["PinState"] != "open" or D(f, "NowPTrue") != D(f, "NowPTrue"):
+                continue
+            d = (D(f, "NowPTrue") - D(f, "EntryPTrue")) * 100
+            drift.append(d)
+            cush.append(D(grade[k], "Ev") * 100 + d)
+        print(f"   ORACLE DRIFT  Pinnacle T+300 {show(drift)}")
+        print(f"   CUSHION       edge + drift   {show(cush)}")
+        # as FILLED: the price actually paid after the delay, plus the same drift from the decision's P_true
+        cush_f = []
+        for k in ks:
+            r = taken[k]
+            f = at(r, 300, 30) if r else None
+            if not f or f["PinState"] != "open" or D(f, "NowPTrue") != D(f, "NowPTrue"):
+                continue
+            cush_f.append(D(r, "DelayedEvAtEntryP") * 100 + (D(f, "NowPTrue") - D(f, "EntryPTrue")) * 100)
+        print(f"                 as filled      {show(cush_f)}   (the price paid after the taker delay)")
+        # ── MATCH-NEUTRAL ──
+        dp, dk, dd = [], [], []
+        for k in ks:
+            a, b = at(grade[k], 60, 10), at(grade[k], 300, 30)
+            if not a or not b or a["PinState"] != "open" or b["PinState"] != "open":
+                continue
+            p0, p1 = D(a, "NowPTrue"), D(b, "NowPTrue")
+            m0 = (D(a, "NowAsk") + D(a, "NowBid")) / 2
+            m1 = (D(b, "NowAsk") + D(b, "NowBid")) / 2
+            if all(x == x for x in (p0, p1, m0, m1)):
+                dp.append((p1 - p0) * 100)
+                dk.append((m1 - m0) * 100)
+                dd.append(((p1 - p0) - (m1 - m0)) * 100)
+        print(f"   MATCH-NEUTRAL T+60->300 Pinnacle {show(dp)}")
+        print(f"                 Polymarket mid  {show(dk)}")
+        print(f"                 Pinnacle-only   {show(dd)}")
+
+    # ── SETTLEMENT ──
+    mk_assets = defaultdict(set)
+    for r in tel:
+        mk_assets[r["MarketId"]].add(r["AssetId"])
+    res = resolutions(mk_assets, data, not args.no_api)
+    print("\nSETTLEMENT (Polymarket's own resolution; walkovers 50-50 = 0.5)")
+    for sp in sorted({v[0]["Sport"] for v in sides.values()}):
+        ks = [k for k in sides if sides[k][0]["Sport"] == sp]
+        for label, keep in (("all", ks), ("deep", [k for k in ks if k in deep_k])):
+            pnl, won, exp, var, n = [], 0.0, 0.0, 0.0, 0
+            for k in keep:
+                r = grade[k]
+                v = res.get(r["AssetId"])
+                if v is None:
+                    continue
+                cost = D(r, "RestAsk") + D(r, "FeePerShare")
+                pnl.append((v - cost) * 100)
+                p = D(r, "PTrueUsed")
+                won += v
+                exp += p
+                var += p * (1 - p)
+                n += 1
+            pending = len(keep) - n
+            line = f"   {sp:11} {label:6} edge after fees {show(pnl)}"
+            if n:
+                line += f"   won {won:.1f} vs P_true {exp:.1f} ({(won - exp) / math.sqrt(var):+.1f} SD)" if var > 0 else ""
+            print(line + (f"   [{pending} not settled yet]" if pending else ""))
+        # the Polymarket-real line: only sides an order would have FILLED after the delay, at the price it paid
+        pnl, pending = [], 0
+        for k in ks:
+            r = taken[k]
+            if r is None:
+                continue
+            v = res.get(r["AssetId"])
+            if v is None:
+                pending += 1
+                continue
+            pnl.append((v - D(r, "DelayedVwap") - D(r, "DelayedFeePerShare")) * 100)
+        print(f"   {sp:11} {'filled':6} edge after fees {show(pnl)}   (at the post-delay fill price)"
+              + (f"   [{pending} not settled yet]" if pending else ""))
+
+
+if __name__ == "__main__":
+    main()
