@@ -563,6 +563,10 @@ internal static class Program
                     await discord.AlertAsync("checking settlements for walkover/retirement flags.");
                     await RunReportAsync("--script settlements");
                     return true;
+                case "forward":
+                    await discord.AlertAsync("scoring the pre-registered give-back forward test.");
+                    await RunReportAsync("--script forward");
+                    return true;
                 case "health":
                 case "feed":
                     await discord.AlertAsync(await SidecarHealthAsync(sidecar));
@@ -581,6 +585,7 @@ internal static class Program
           + "`ev digest` — the short digest of every section\n"
           + "`ev section <n>` — one section (1..11, 4b/4c/4d/4e) · `ev cooldown` = §10 · `ev live` = §7\n"
           + "`ev clv` — pre-match CLV vs Pinnacle's close · `ev settlements` — walkover/retirement flags\n"
+          + "`ev forward` — the pre-registered give-back forward test (rules fixed 2026-10-27)\n"
           + "`ev close` — stop the EV bot (the sidecar stays up)";
 
         var cmdListener = new DiscordCommandListener(
@@ -600,7 +605,7 @@ internal static class Program
         {
             Console.WriteLine("[DISCORD CMD] remote commands ON — address them to this bot: "
                             + "`ev status` / `ev health` / `ev radar` / `ev resolve` / `ev digest` / `ev section <n>` / "
-                            + "`ev clv` / `ev settlements` / `ev close` (sidecar verbs also forwarded; `commands` lists all).");
+                            + "`ev clv` / `ev settlements` / `ev forward` / `ev close` (sidecar verbs also forwarded; `commands` lists all).");
             _ = Task.Run(() => cmdListener.RunAsync(cts.Token));
         }
         if (discord.Enabled)

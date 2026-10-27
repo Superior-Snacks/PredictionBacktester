@@ -116,6 +116,7 @@ def post_text(url: str, head: str, body: str, filename: str, inline_max: int = 3
 SCRIPTS = {
     "clv":         ("clv_prematch.py",    [],                     "pre-match CLV vs Pinnacle's close"),
     "settlements": ("check_settlements.py", ["--fills", "--flagged", "--brief"], "settlement flags on our fills (walkovers, retirements, abrupt ends)"),
+    "forward":     ("ev_forward_test.py", [],                     "pre-registered tennis give-back forward test (rules fixed 2026-10-27)"),
 }
 
 
