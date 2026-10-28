@@ -14,6 +14,9 @@ KalshiEvBot, nothing the bot reads. What it touches of the running stack, and wh
     league gets a Pinnacle WS subscription and a REST seed. So this asks only for selections the bot is polling at
     that moment, and only while the bot is running - it can never open a league, or keep one open, on its own.
   * Polymarket's public Gamma API, CLOB /book and market WebSocket - unauthenticated reads.
+  * the bot's own telemetry files (EvTelemetry / EvShadowTelemetry) - read as they are written, for the CROSS-VENUE
+    ARB telemetry's Kalshi prices, plus Kalshi's PUBLIC order book (no key) when Polymarket looks off. Windows ->
+    PolyArbWindows_<day>.csv with how long each stayed open. POLY_ARB=0 turns it off.
 
 Polymarket facts this relies on (docs.polymarket.com, read 2026-10-27):
   * sports taker fee = shares x rate x p(1-p), rate 0.05 since 2026-07-10, per market in `feeSchedule`
@@ -63,6 +66,7 @@ ROOT = Path(__file__).resolve().parent.parent
 GAMMA = "https://gamma-api.polymarket.com"
 CLOB = "https://clob.polymarket.com"
 WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+KALSHI = "https://api.elections.kalshi.com/trade-api/v2"      # PUBLIC market data only - no key, no account
 
 # Polymarket tags to search per sport. Tennis has one umbrella tag; 61 of 67 basketball leagues carry the
 # Basketball tag (28) and the six that do not are listed by their own; same idea for football and baseball.
@@ -154,6 +158,12 @@ class Cfg:
         # the would-be order walked through the book one taker delay later: the bot's deep cut, and about what
         # its $5-15 Kelly stakes buy at mid prices
         self.order_shares = float(os.environ.get("POLY_ORDER_SHARES", 15))
+        # CROSS-VENUE ARB telemetry (Kalshi <-> Polymarket on the same match; see Shadow.arb_update)
+        self.arb = os.environ.get("POLY_ARB", "1") != "0"
+        self.arb_kalshi_rps = float(os.environ.get("POLY_ARB_KALSHI_RPS", 2))       # public order-book reads/s, max
+        self.arb_poll_ms = float(os.environ.get("POLY_ARB_POLL_MS", 1000))          # Kalshi re-read while a window is open
+        self.arb_trigger = float(os.environ.get("POLY_ARB_TRIGGER_CENTS", 0.5)) / 100
+        self.arb_kalshi_max_age = float(os.environ.get("POLY_ARB_KALSHI_MAX_AGE_MS", 3000)) / 1000
 
 
 def _num(s):
@@ -224,6 +234,13 @@ def fee_per_share(p: float, rate: float, exp: float) -> float:
     if rate <= 0 or not (0 < p < 1):
         return 0.0
     return rate * (p * (1.0 - p)) ** exp
+
+
+def kalshi_fee(p: float, mult: float) -> float:
+    """Kalshi taker fee per contract: mult x 0.07 x p(1-p), the 'quadratic' fee type (EvMath.FeePerContract), with
+    the series multiplier from the public /series endpoint. Kalshi rounds each ORDER's fee up to the cent, which this
+    per-contract figure leaves out (0.05c/contract at 15 contracts)."""
+    return mult * 0.07 * p * (1.0 - p) if 0 < p < 1 else 0.0
 
 
 def break_even_limit(p_true: float, ev_min: float, rate: float, exp: float) -> float:
@@ -389,12 +406,13 @@ class DailyCsv:
 
 class Matchup:
     """One Pinnacle two-way from cross_pairs.json: both selection tokens, both names, the listed start."""
-    __slots__ = ("mid", "sport", "home_tok", "away_tok", "home_name", "away_name", "start", "tickers")
+    __slots__ = ("mid", "sport", "home_tok", "away_tok", "home_name", "away_name", "start", "tickers", "kyes")
 
     def __init__(self, mid, sport, start):
         self.mid, self.sport, self.start = mid, sport, start
         self.home_tok = self.away_tok = self.home_name = self.away_name = ""
         self.tickers: set[str] = set()
+        self.kyes: dict[str, str] = {}      # Kalshi ticker -> the leg ("home" / "away") its YES pays on
 
 
 def load_matchups(path: Path) -> dict[str, Matchup]:
@@ -428,6 +446,8 @@ def load_matchups(path: Path) -> dict[str, Matchup]:
             else:
                 m.away_tok, m.home_tok, m.away_name, m.home_name = r["hardven_yes_token"], r["hardven_no_token"], mine, other
             m.tickers.add(r.get("kalshi_ticker") or "")
+            if r.get("kalshi_ticker"):
+                m.kyes[r["kalshi_ticker"]] = ys[2]
     return out
 
 
@@ -691,6 +711,89 @@ SNAP_COLS = [
     "PTrueUsed", "PTrueRaw", "PinOddsMine", "PinOddsOther", "Ask", "AskSize", "Bid", "BidSize", "BookAgeMs",
     "LastTrade", "PairCheck",
 ]
+# One row per cross-venue ARB WINDOW, written when it closes (Shadow.arb_update).
+ARB_COLS = [
+    "OpenUtc", "CloseUtc", "DurationMs", "LastPositiveMs", "CloseReason", "ReopenGapMs", "Sport",
+    "KalshiTicker", "KalshiSide", "PolyTicker", "PolyOutcome", "PolyAssetId", "EventTitle", "Trigger", "InPlay",
+    "KalshiSourceOpen", "KalshiAgeMsOpen", "KalshiAskOpen", "KalshiSizeOpen", "PolyAskOpen", "PolySizeOpen",
+    "KalshiFeeOpen", "PolyFeeOpen", "MarginOpenCents", "MaxMarginCents", "MaxMarginAtMs", "ArbShares",
+    "ProfitOpenUsd", "PTrueKalshiLeg", "PTruePolyLeg", "KalshiEdgeVsPinCents", "PolyEdgeVsPinCents",
+    "KalshiReads", "PolyAfterDelay", "PolyDelayedAsk", "PolyDelayedSharesAtSeen", "KalshiConfirmed",
+    # WHAT MADE THE GAP (at the open): Pinnacle quiet = a passive gap with no game event behind it
+    "Origin", "PinChangeAgeMs", "PinMove30sCents", "PolyMove10sCents", "KalshiChangeAgeMs",
+    # LEG RISK - both orders of execution, priced one taker delay after the open (Shadow.arb_after_delay)
+    "KalshiAskAt1s", "KalshiFirstMarginCents", "PolyFirstMarginCents",
+]
+
+
+class BotTail:
+    """The bot's own Kalshi price checks, read as they are written.
+
+    Every REST-confirmed Kalshi ask the bot takes lands in EvTelemetry / EvShadowTelemetry, and RollingCsv writes with
+    AutoFlush - so reading the new lines hands this process fresh Kalshi prices without a Kalshi connection of its own
+    (the account allows ONE WebSocket, and the bot holds it) and without a line of code in the bot. The bot opens its
+    files FileShare.Read, so reading them can never block the writer."""
+    PREFIXES = ("EvTelemetry", "EvShadowTelemetry")
+
+    def __init__(self):
+        self.pos: dict[str, int] = {}
+        self.hdr: dict[str, list[str]] = {}
+        self.tail: dict[str, bytes] = {}
+        self.start_day = utcnow().strftime("%Y%m%d")
+
+    def poll(self) -> list[dict]:
+        out = []
+        day = utcnow().strftime("%Y%m%d")
+        for prefix in self.PREFIXES:
+            path = ROOT / f"{prefix}_{day}.csv"
+            key = str(path)
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            if key not in self.pos:
+                try:
+                    with open(path, "rb") as fh:
+                        head = fh.readline()
+                except OSError:
+                    continue
+                if not head.endswith(b"\n"):
+                    continue                                 # the header itself is still being written
+                self.hdr[key] = next(csv.reader([head.decode("utf-8", "replace").strip("\r\n")]))
+                # A file that existed when we started holds history, not live prices: start at its END. A file born
+                # while we run (the next UTC day's) is all new: start right after its header.
+                self.pos[key] = size if day == self.start_day else len(head)
+                self.tail[key] = b""
+                continue
+            pos = self.pos[key]
+            if size <= pos:
+                continue
+            try:
+                with open(path, "rb") as fh:
+                    fh.seek(pos)
+                    chunk = fh.read(size - pos)
+            except OSError:
+                continue
+            self.pos[key] = pos + len(chunk)
+            lines = (self.tail[key] + chunk).split(b"\n")
+            self.tail[key] = lines[-1]                      # a line still being written waits for its newline
+            hdr = self.hdr[key]
+            for ln in lines[:-1]:
+                if not ln.strip():
+                    continue
+                try:
+                    vals = next(csv.reader([ln.decode("utf-8", "replace").rstrip("\r")]))
+                except (csv.Error, StopIteration):
+                    continue
+                if len(vals) == len(hdr):
+                    out.append(dict(zip(hdr, vals)))
+        return out
+
+
+def bot_time(s: str) -> float | None:
+    """The bot's .NET round-trip timestamp ('...T12:09:30.1234567Z', seven fraction digits) -> unix seconds."""
+    t = parse_time(re.sub(r"(\.\d{6})\d+", r"\1", s or ""))
+    return t.timestamp() if t else None
 
 
 class Shadow:
@@ -725,6 +828,24 @@ class Shadow:
         self._last_status = (time.time(), 0, 0)
         self.proc = psutil.Process()
         self.proc.cpu_percent(None)
+        # ── cross-venue arb (Shadow.arb_update) ──
+        self.arb_csv = DailyCsv(cfg.data, "PolyArbWindows", ARB_COLS)
+        self.kq: dict[tuple, dict] = {}            # (kalshi ticker, side) -> {ask, size, mono, wall, src}
+        self.k_changed: dict[tuple, tuple] = {}    # (kalshi ticker, side) -> (last ask, wall time it last changed)
+        self.kmult: dict[str, float] = {}          # Kalshi series -> fee multiplier (public /series)
+        self.combos_by_asset: dict[str, list] = {}  # polymarket asset -> [(kalshi ticker, side)] that complete it
+        self.combos_by_k: dict[tuple, list] = {}   # (kalshi ticker, side) -> [polymarket asset]
+        self.windows: dict[tuple, dict] = {}       # (ticker, side, asset) -> the OPEN window
+        self.arb_pending: list[dict] = []          # closed, waiting for their Polymarket delay check before the row
+        self.last_close: dict[tuple, float] = {}
+        self.k_last_read: dict[str, float] = {}
+        self.k_inflight: set[str] = set()
+        self.k_tokens = cfg.arb_kalshi_rps
+        self.k_tokens_at = time.monotonic()
+        self.bot_tail = BotTail()
+        self.arb_day = utcnow().strftime("%Y%m%d")
+        self.arb_best = (-1e9, "")                 # the closest any pair came today, in cents after fees
+        self.arb_hist = Counter()                  # every evaluated pair, by margin bucket
 
     # ── logging ──
     def log(self, msg: str):
@@ -867,6 +988,33 @@ class Shadow:
         self.want = set(want_sides)
         for a in [a for a in self.books if a not in self.want]:
             del self.books[a]
+        if self.cfg.arb:
+            self.arb_rebuild()
+
+    def arb_rebuild(self):
+        """Which Kalshi side completes which Polymarket outcome. A Kalshi ticker's YES pays on one leg of the matchup:
+        YES + Polymarket's OTHER player covers both results, and so does NO + Polymarket's SAME player - either pair
+        pays exactly $1, so buying both under $1 after fees is the arb. Four pairs per two-ticker match."""
+        cb_a, cb_k = defaultdict(list), defaultdict(list)
+        for pm in {s.market for s in self.sides.values()}:
+            mu = pm.matchup
+            if mu is None or len(pm.legs) != 2:
+                continue
+            by_leg = {pm.legs[i]: pm.assets[i] for i in range(2)}
+            for tk, leg in mu.kyes.items():
+                same, other = by_leg.get(leg), by_leg.get("away" if leg == "home" else "home")
+                if not (same and other):
+                    continue
+                for kside, asset in (("YES", other), ("NO", same)):
+                    cb_a[asset].append((tk, kside))
+                    cb_k[(tk, kside)].append(asset)
+                series = tk.split("-")[0]
+                if series not in self.kmult:
+                    self.kmult[series] = 1.0                 # until /series answers; the bot's default too
+                    self._spawn(self.kalshi_mult(series))
+        self.combos_by_asset, self.combos_by_k = dict(cb_a), dict(cb_k)
+        for key in [k for k in self.windows if k[2] not in self.want]:
+            self.arb_close(key, "unwatched")
 
     def poll_tokens(self) -> list[str]:
         now = utcnow()
@@ -1043,11 +1191,14 @@ class Shadow:
         unverified = not c["wv"]
         signal = (clears and not unverified and not implausible and not prematch and not poly_led and in_win
                   and not not_rising and not devig_split and not source_gap)
-        decision = ("SIGNAL" if signal else "IMPLAUSIBLE" if implausible else "POLY_LED" if poly_led
-                    else "SIGNAL_PREMATCH" if prematch else "OUT_OF_BAND" if not in_win
+        # The bot's TELEMETRY label, in its order (EvEvaluator's row write, not its console line): anything that did
+        # not clear EV_MIN at REST is REJECTED_REST before any guard is named, and pre-match comes near the end - so
+        # the two venues' Decision columns count the same things.
+        decision = ("SIGNAL" if signal else "REJECTED_REST" if not clears else "IMPLAUSIBLE" if implausible
+                    else "POLY_LED" if poly_led else "OUT_OF_BAND" if not in_win
                     else "SOURCE_DISAGREE" if source_gap else "DEVIG_DISAGREE" if devig_split
                     else ("NOT_RISING" if rise is not None else "NO_KINETIC_HISTORY") if not_rising
-                    else "SIGNAL_UNVERIFIED" if clears else "BELOW_EV")
+                    else "SIGNAL_PREMATCH" if prematch else "SIGNAL_UNVERIFIED")
         self.stats["decision:" + decision] += 1
         if signal:
             self.stats[f"signals:{pm.sport}"] += 1
@@ -1245,6 +1396,8 @@ class Shadow:
                 side = self.sides.get(a)
                 if side is not None and ba is not None:
                     self.consider(side, now)
+                if self.cfg.arb:
+                    self.arb_on_poly(a, now)
 
     def on_resolved(self, m: dict):
         win = m.get("winning_asset_id")
@@ -1337,6 +1490,371 @@ class Shadow:
                         self.books[a] = book
             except Exception as e:
                 self.log(f"[ws] seed failed: {type(e).__name__}: {e}")
+
+    # ── cross-venue arb: Kalshi + Polymarket on the same match ──
+    #
+    # An ARB WINDOW is open while buying one result on Kalshi and the other on Polymarket costs under $1 after BOTH
+    # venues' taker fees. It is logged from the first reading that shows it to the first that does not, so the row
+    # carries how long it really lasted - the number that says whether anyone could take it.
+    #
+    # KALSHI PRICES WITHOUT A KALSHI CONNECTION. The bot's own REST checks (BotTail) arrive within a second of being
+    # taken, and cover every moment Kalshi looked off against Pinnacle. Moments when POLYMARKET looks off are covered by
+    # one read of Kalshi's PUBLIC order book (no key, rate-limited). While a window is open, the Kalshi side is re-read
+    # every POLY_ARB_POLL_MS and the Polymarket side is live, so the close is seen within about a second.
+    def fair(self, side: PmSide, now: float):
+        """P_true of this Polymarket outcome, or None - the screen's arithmetic without its counters or samples."""
+        mu = side.market.matchup
+        qs = [self.oracle.quotes.get(t) for t in (mu.home_tok, mu.away_tok)]
+        if any(q is None or not q["open"] or not self.oracle.fresh(q, now) for q in qs):
+            return None
+        odds = [q["odds"] for q in qs]
+        pv = (devig_shin(odds) if self.cfg.devig == "shin" else devig_prop(odds))[0]
+        return pv[0 if side.leg == "home" else 1]
+
+    async def kalshi_mult(self, series: str):
+        try:
+            r = await self.http.get(f"{KALSHI}/series/{series}", timeout=10.0)
+            se = (r.json() or {}).get("series") or {}
+            self.kmult[series] = float(se.get("fee_multiplier") or 1.0)
+        except Exception:
+            pass                                             # stays 1.0, as the bot falls back
+
+    def k_request(self, ticker: str, why: str):
+        """One read of Kalshi's public order book: at most POLY_ARB_KALSHI_RPS a second overall, one in flight and
+        one a second per ticker."""
+        now = time.monotonic()
+        if ticker in self.k_inflight or now - self.k_last_read.get(ticker, -1e9) < 0.9:
+            return
+        self.k_tokens = min(self.cfg.arb_kalshi_rps,
+                            self.k_tokens + (now - self.k_tokens_at) * self.cfg.arb_kalshi_rps)
+        self.k_tokens_at = now
+        if self.k_tokens < 1:
+            self.stats["arb:kalshi_rate_skip"] += 1
+            return
+        self.k_tokens -= 1
+        self.k_inflight.add(ticker)
+        self.k_last_read[ticker] = now
+        self._spawn(self.k_read(ticker, why))
+
+    async def k_read(self, ticker: str, why: str):
+        try:
+            r = await self.http.get(f"{KALSHI}/markets/{ticker}/orderbook", params={"depth": 3}, timeout=5.0)
+            if r.status_code == 429:                        # back off: the bucket goes negative for a few seconds
+                self.stats["arb:kalshi_429"] += 1
+                self.k_tokens = -3 * self.cfg.arb_kalshi_rps
+                return
+            r.raise_for_status()
+            ob = r.json()
+        except Exception:
+            self.stats["arb:kalshi_err"] += 1
+            return
+        finally:
+            self.k_inflight.discard(ticker)
+        self.stats["arb:kalshi_reads"] += 1
+        self.k_store(ticker, self.k_parse(ob))
+        for (tk, kside, asset), w in list(self.windows.items()):
+            if tk == ticker:
+                w["k_reads"] += 1
+        for kside in ("YES", "NO"):
+            for asset in self.combos_by_k.get((ticker, kside), []):
+                self.arb_update(ticker, kside, asset, why)
+
+    @staticmethod
+    def k_parse(ob: dict) -> dict:
+        """Kalshi's order book -> {'YES': (ask, size) | None, 'NO': ...}. BIDS ONLY on both sides, ascending: a YES ask
+        is a NO bid selling, so YES ask = 1 - best NO bid, at that bid's size; NO likewise."""
+        fp = ob.get("orderbook_fp") or {}
+        yes = [(float(p), float(s)) for p, s in fp.get("yes_dollars") or []]
+        no = [(float(p), float(s)) for p, s in fp.get("no_dollars") or []]
+        if not fp and isinstance(ob.get("orderbook"), dict):     # the older cents layout
+            yes = [(p / 100, float(s)) for p, s in ob["orderbook"].get("yes") or []]
+            no = [(p / 100, float(s)) for p, s in ob["orderbook"].get("no") or []]
+        out = {}
+        for kside, bids in (("YES", no), ("NO", yes)):
+            if bids:
+                p, s = max(bids)
+                out[kside] = (round(1 - p, 4), s)
+            else:
+                out[kside] = None                            # nothing to buy on that side
+        return out
+
+    def k_store(self, ticker: str, asks: dict):
+        mono, wall = time.monotonic(), time.time()
+        for kside, v in asks.items():
+            if v is None:
+                self.kq.pop((ticker, kside), None)
+            else:
+                self.k_set((ticker, kside), {"ask": v[0], "size": v[1], "mono": mono, "wall": wall, "src": "rest"})
+
+    def k_set(self, key: tuple, entry: dict):
+        """Every Kalshi price goes through here, so the time it last CHANGED is known - which venue moved first."""
+        prev = self.k_changed.get(key)
+        if prev is None or prev[0] != entry["ask"]:
+            self.k_changed[key] = (entry["ask"], entry["wall"])
+        self.kq[key] = entry
+
+    def arb_on_poly(self, asset: str, now: float):
+        """Polymarket's best ask moved. Re-check every Kalshi side that completes this outcome; where the Kalshi price
+        is not fresh, ask Kalshi only if THIS price is far enough under Pinnacle to make an arb plausible."""
+        combos = self.combos_by_asset.get(asset)
+        if not combos:
+            return
+        side = self.sides.get(asset)
+        mono = time.monotonic()
+        for tk, kside in combos:
+            k = self.kq.get((tk, kside))
+            if k is not None and mono - k["mono"] <= self.cfg.arb_kalshi_max_age:
+                self.arb_update(tk, kside, asset, "POLY_MOVE")
+                continue
+            book = self.books.get(asset)
+            if side is None or book is None or not book.seeded or not book.asks:
+                continue
+            p = self.fair(side, now)
+            a = book.best_ask()
+            if p is not None and a + fee_per_share(a, side.market.fee_rate, side.market.fee_exp) <= p - self.cfg.arb_trigger:
+                self.k_request(tk, "POLY_CHEAP")
+
+    def arb_update(self, tk: str, kside: str, asset: str, trigger: str):
+        key = (tk, kside, asset)
+        mono, wall = time.monotonic(), time.time()
+        k = self.kq.get((tk, kside))
+        book = self.books.get(asset)
+        side = self.sides.get(asset)
+        w = self.windows.get(key)
+        if side is None or book is None or not book.seeded or not book.asks:
+            if w is not None:
+                self.arb_close(key, "poly-gone")
+            return
+        if k is None:
+            if w is not None:
+                self.arb_close(key, "kalshi-gone")
+            return
+        if mono - k["mono"] > self.cfg.arb_kalshi_max_age:
+            return                                           # stale: the poller refreshes it, or closes it at 5s
+        pm = side.market
+        ap = book.best_ask()
+        fk = kalshi_fee(k["ask"], self.kmult.get(tk.split("-")[0], 1.0))
+        fp = fee_per_share(ap, pm.fee_rate, pm.fee_exp)
+        margin = (1.0 - (k["ask"] + ap + fk + fp)) * 100
+        self.stats["arb:checks"] += 1
+        self.arb_hist["<-3c" if margin < -3 else "-3..-1c" if margin < -1 else "-1..0c" if margin <= 0 else ">0"] += 1
+        if margin > self.arb_best[0]:
+            self.arb_best = (margin, f"{tk} {kside} + {side.outcome}")
+        if w is None:
+            if margin > 0:
+                self.arb_open(key, side, k, ap, book.asks.get(ap, 0.0), fk, fp, margin, trigger)
+            return
+        if margin > 0:
+            w["last_pos_w"] = wall
+            if k["src"] == "rest" and mono - k["mono"] < 1.5:
+                w["confirmed"] = True
+            if margin > w["max_margin"]:
+                w.update(max_margin=margin, max_at_w=wall)
+        else:
+            self.arb_close(key, "closed")
+
+    def arb_open(self, key, side: PmSide, k: dict, ap: float, asz: float, fk: float, fp: float, margin: float,
+                 trigger: str):
+        tk, kside, asset = key
+        mono, wall = time.monotonic(), time.time()
+        pm = side.market
+        p_poly = self.fair(side, wall)                      # P_true of the Polymarket leg; Kalshi's is its complement
+        q = self.oracle.quotes.get(pm.matchup.home_tok)
+        sizes = [s for s in (k.get("size"), asz) if s and s > 0]
+        shares = min(sizes + [self.cfg.order_shares])
+        # WHAT MADE THE GAP. A gap opened while Pinnacle is still (no price change for 10s+) has no game event behind
+        # it - an order sweeping a level, a quote pulled - and the operator's question is whether those last longer,
+        # since nothing is pushing the other venue to reprice. Moving vs quiet is judged on Pinnacle's last change.
+        legs = [self.oracle.quotes.get(t) for t in (pm.matchup.home_tok, pm.matchup.away_tok)]
+        chg = max((q["odds_changed"] for q in legs if q and q["odds_changed"]), default=0.0)
+        pin_age = (wall - chg) * 1000 if chg else None
+        old = next((p for t, p in side.track if t >= wall - 30), None)
+        pin_move = None if old is None else (side.track[-1][1] - old) * 100
+        bk = self.books.get(asset)
+        poly_move = bk.ask_move(wall, 10) if bk else None
+        kc = self.k_changed.get((tk, kside))
+        origin = ("UNKNOWN" if pin_age is None else "PINNACLE_MOVING" if pin_age < 10_000 else "PINNACLE_QUIET")
+        w = {"open_w": wall, "open_m": mono, "trigger": trigger, "tk": tk, "kside": kside, "asset": asset,
+             "origin": origin, "pin_age_ms": pin_age, "pin_move30": pin_move,
+             "poly_move10": None if poly_move is None else poly_move * 100,
+             "k_change_age_ms": (wall - kc[1]) * 1000 if kc else None,
+             "fee_rate": pm.fee_rate, "fee_exp": pm.fee_exp, "kmult": self.kmult.get(tk.split("-")[0], 1.0),
+             "sport": pm.sport, "slug": pm.slug, "outcome": side.outcome, "title": pm.question,
+             "inplay": q["live"] if q else None, "delay": pm.delay,
+             "k_src": k["src"], "k_age_ms": (mono - k["mono"]) * 1000, "k_ask": k["ask"], "k_size": k.get("size"),
+             "p_ask": ap, "p_size": asz, "fk": fk, "fp": fp, "margin": margin, "max_margin": margin,
+             "max_at_w": wall, "last_pos_w": wall, "shares": shares,
+             "p_true_p": p_poly, "p_true_k": None if p_poly is None else 1 - p_poly, "k_reads": 0,
+             # CONFIRMED = a Kalshi price read by THIS process (REST, under 1.5s old) showed the arb. A window opened
+             # on a bot row is up to 3s old on the Kalshi side and often closes on the first fresh read - logged, but
+             # not the same evidence. 2026-10-28's first window was exactly that: +1.45c, open 0.2s, 2.2s-old row.
+             "confirmed": k["src"] == "rest" and mono - k["mono"] < 1.5,
+             "ad_done": False, "closed": False,
+             "reopen_gap_ms": (wall - self.last_close[key]) * 1000 if key in self.last_close else None}
+        self.windows[key] = w
+        self.stats["arb:opened"] += 1
+        self.log(f"[ARB OPEN] {pm.sport} {pm.question[:44]} | Kalshi {tk} {kside} {k['ask']:.2f} + Polymarket "
+                 f"{side.outcome} {ap:.3f} = {margin:+.2f}c after fees, {shares:.0f} sh ({trigger}; Kalshi price "
+                 f"{w['k_age_ms']:.0f}ms old, {k['src']})")
+        self._spawn(self.arb_after_delay(w))
+        self.k_request(tk, "WINDOW")                       # confirm the Kalshi side straight away
+
+    def arb_close(self, key, reason: str):
+        w = self.windows.pop(key, None)
+        if w is None:
+            return
+        w.update(close_w=time.time(), reason=reason, closed=True)
+        self.last_close[key] = w["close_w"]
+        if w["ad_done"]:
+            self.arb_write(w)
+        else:
+            self.arb_pending.append(w)                       # the delay check writes it when it lands
+
+    async def arb_after_delay(self, w: dict):
+        """BOTH LEGS one taker delay after the window opened - when an order sent at the open would match.
+
+        The Polymarket leg: FULL_AT_SEEN = the arb's size still there at or under the price we saw; PARTIAL = some;
+        GONE = none. The Kalshi leg is read at the same moment, which prices the LEG RISK of each order of execution:
+          Kalshi first (instant), Polymarket a delay later at whatever its best ask is then  -> KalshiFirstMarginCents
+          Polymarket first (delayed; an unfilled FAK is a FREE miss), then Kalshi at its ask a delay later
+                                                    -> PolyFirstMarginCents (only when the Polymarket leg filled)
+        Negative = the arb turned into a loss on the second leg; that is the leg risk, measured."""
+        try:
+            if w["delay"] <= 0:
+                w["ad"] = "NO_DELAY"
+            else:
+                await asyncio.sleep(max(0.0, w["open_m"] + w["delay"] - time.monotonic()))
+                poly, kal = await asyncio.gather(self.poly_asks(w["asset"]), self.kalshi_asks(w["tk"]),
+                                                 return_exceptions=True)
+                if isinstance(poly, BaseException) or poly is None:
+                    w["ad"] = "RECHECK_FAILED"
+                else:
+                    at_seen = sum(s for p, s in poly if p <= w["p_ask"] + 1e-9)
+                    need = w["shares"] if w["shares"] > 0 else 1.0
+                    w.update(ad="FULL_AT_SEEN" if at_seen >= need else "PARTIAL" if at_seen > 0 else "GONE",
+                             ad_ask=poly[0][0] if poly else None, ad_shares=at_seen)
+                if not isinstance(kal, BaseException) and kal is not None:
+                    v = kal.get(w["kside"])
+                    w["k_ask_1s"] = v[0] if v else None
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            w["ad"] = w.get("ad") or "RECHECK_FAILED"
+        if w.get("ad_ask") is not None:
+            w["kfirst"] = (1 - (w["k_ask"] + w["fk"] + w["ad_ask"]
+                                + fee_per_share(w["ad_ask"], w["fee_rate"], w["fee_exp"]))) * 100
+        if w.get("ad") == "FULL_AT_SEEN" and w.get("k_ask_1s") is not None:
+            w["pfirst"] = (1 - (w["p_ask"] + w["fp"] + w["k_ask_1s"] + kalshi_fee(w["k_ask_1s"], w["kmult"]))) * 100
+        w["ad_done"] = True
+        if w["closed"]:
+            if any(x is w for x in self.arb_pending):
+                self.arb_pending = [x for x in self.arb_pending if x is not w]
+            self.arb_write(w)
+
+    async def poly_asks(self, asset: str):
+        """Polymarket's REST book for one outcome, asks ascending."""
+        async with self.delay_sem:
+            r = await self.http.get(CLOB + "/book", params={"token_id": asset}, timeout=5.0)
+            r.raise_for_status()
+            b = r.json()
+        return sorted((float(x["price"]), float(x["size"])) for x in b.get("asks") or [])
+
+    async def kalshi_asks(self, ticker: str):
+        """One Kalshi public order-book read at a moment that matters (the leg-risk check), outside the trigger
+        rate limit - there is one per window. It also refreshes the cache like any other read."""
+        r = await self.http.get(f"{KALSHI}/markets/{ticker}/orderbook", params={"depth": 3}, timeout=5.0)
+        if r.status_code == 429:
+            self.stats["arb:kalshi_429"] += 1
+            return None
+        r.raise_for_status()
+        self.stats["arb:kalshi_reads"] += 1
+        asks = self.k_parse(r.json())
+        self.k_store(ticker, asks)
+        return asks
+
+    def arb_write(self, w: dict):
+        def at(t):
+            return iso(dt.datetime.fromtimestamp(t, dt.timezone.utc))
+        dur = (w["close_w"] - w["open_w"]) * 1000
+        edge = lambda p, a, f: None if p is None else (p - a - f) * 100
+        self.stats["arb:closed"] += 1
+        self.arb_csv.write({
+            "OpenUtc": at(w["open_w"]), "CloseUtc": at(w["close_w"]), "DurationMs": round(dur),
+            "LastPositiveMs": round((w["last_pos_w"] - w["open_w"]) * 1000), "CloseReason": w["reason"],
+            "ReopenGapMs": None if w["reopen_gap_ms"] is None else round(w["reopen_gap_ms"]), "Sport": w["sport"],
+            "KalshiTicker": w["tk"], "KalshiSide": w["kside"], "PolyTicker": w["slug"], "PolyOutcome": w["outcome"],
+            "PolyAssetId": w["asset"], "EventTitle": w["title"], "Trigger": w["trigger"], "InPlay": w["inplay"],
+            "KalshiSourceOpen": w["k_src"], "KalshiAgeMsOpen": round(w["k_age_ms"]), "KalshiAskOpen": w["k_ask"],
+            "KalshiSizeOpen": w["k_size"], "PolyAskOpen": w["p_ask"], "PolySizeOpen": w["p_size"],
+            "KalshiFeeOpen": w["fk"], "PolyFeeOpen": w["fp"], "MarginOpenCents": w["margin"],
+            "MaxMarginCents": w["max_margin"], "MaxMarginAtMs": round((w["max_at_w"] - w["open_w"]) * 1000),
+            "ArbShares": w["shares"], "ProfitOpenUsd": w["margin"] / 100 * w["shares"],
+            "PTrueKalshiLeg": w["p_true_k"], "PTruePolyLeg": w["p_true_p"],
+            "KalshiEdgeVsPinCents": edge(w["p_true_k"], w["k_ask"], w["fk"]),
+            "PolyEdgeVsPinCents": edge(w["p_true_p"], w["p_ask"], w["fp"]),
+            "KalshiReads": w["k_reads"], "PolyAfterDelay": w.get("ad"), "PolyDelayedAsk": w.get("ad_ask"),
+            "PolyDelayedSharesAtSeen": w.get("ad_shares"), "KalshiConfirmed": w["confirmed"],
+            "Origin": w["origin"],
+            "PinChangeAgeMs": None if w["pin_age_ms"] is None else round(w["pin_age_ms"]),
+            "PinMove30sCents": w["pin_move30"], "PolyMove10sCents": w["poly_move10"],
+            "KalshiChangeAgeMs": None if w["k_change_age_ms"] is None else round(w["k_change_age_ms"]),
+            "KalshiAskAt1s": w.get("k_ask_1s"), "KalshiFirstMarginCents": w.get("kfirst"),
+            "PolyFirstMarginCents": w.get("pfirst"),
+        })
+        self.arb_csv.flush()
+        self.log(f"[ARB CLOSE] {w['tk']} {w['kside']} + {w['outcome']}: open {dur / 1000:.1f}s, opened {w['margin']:+.2f}c, "
+                 f"best {w['max_margin']:+.2f}c, {w['reason']}; Polymarket leg after its delay: {w.get('ad')}; "
+                 f"{'CONFIRMED by a fresh Kalshi read' if w['confirmed'] else 'never confirmed by a fresh Kalshi read'}")
+
+    async def arb_tail_loop(self):
+        """Fresh Kalshi asks from the bot's own REST checks, as it writes them."""
+        while not self.stopping:
+            await asyncio.sleep(0.3)
+            if not self.bot_alive or not self.combos_by_k:
+                continue
+            try:
+                rows = self.bot_tail.poll()
+            except Exception as e:
+                self.log(f"[arb] reading the bot's telemetry: {type(e).__name__}: {e}")
+                continue
+            mono, wall = time.monotonic(), time.time()
+            for r in rows:
+                key = (r.get("Ticker"), r.get("Side"))
+                if key not in self.combos_by_k:
+                    continue
+                ask, t = _num(r.get("KalshiRestAsk")), bot_time(r.get("Timestamp"))
+                if ask is None or t is None or not (0 < ask < 1):
+                    continue
+                age = wall - t
+                held = self.kq.get(key)
+                if held is not None and held["wall"] >= t:
+                    continue                                 # we already hold something newer
+                self.stats["arb:bot_rows"] += 1
+                if age > self.cfg.arb_kalshi_max_age:
+                    self.stats["arb:bot_rows_stale"] += 1
+                    continue
+                self.k_set(key, {"ask": ask, "size": _num(r.get("WsAskDepth")) or 0.0, "mono": mono - age, "wall": t,
+                                 "src": "bot-row"})
+                for asset in self.combos_by_k[key]:
+                    self.arb_update(key[0], key[1], asset, "BOT_ROW")
+
+    async def arb_poll_loop(self):
+        """Keep each OPEN window's Kalshi side fresh, so its close is seen; a window whose Kalshi side cannot be
+        refreshed for 5s is no longer known to be open and is closed as such."""
+        while not self.stopping:
+            await asyncio.sleep(0.25)
+            if not self.windows:
+                continue
+            mono = time.monotonic()
+            for key, w in list(self.windows.items()):
+                tk, kside, _ = key
+                k = self.kq.get((tk, kside))
+                if k is None or mono - k["mono"] > 5.0:
+                    self.arb_close(key, "kalshi-stale")
+                    continue
+                gap = self.cfg.arb_poll_ms / 1000 if mono - w["open_m"] < 60 else 3.0
+                if mono - self.k_last_read.get(tk, -1e9) >= gap:
+                    self.k_request(tk, "WINDOW")
 
     # ── loops ──
     async def oracle_loop(self):
@@ -1439,12 +1957,23 @@ class Shadow:
             p50 = pms[len(pms) // 2] if pms else float("nan")
             sig = sum(v for k, v in self.stats.items() if k.startswith("signals:"))
             cand = self.stats["rest_checks"]
+            arb = ""
+            if self.cfg.arb:
+                today = utcnow().strftime("%Y%m%d")
+                if today != self.arb_day:                    # the "closest" is a per-day figure
+                    self.arb_day, self.arb_best, self.arb_hist = today, (-1e9, ""), Counter()
+                h = self.arb_hist
+                arb = (f" | arb {len(self.windows)} open, {self.stats['arb:closed']} closed, "
+                       f"{self.stats['arb:checks']} checks (<-3c {h['<-3c']}, -3..-1 {h['-3..-1c']}, -1..0 {h['-1..0c']}, "
+                       f">0 {h['>0']}), closest {self.arb_best[0]:+.1f}c, kalshi {self.stats['arb:kalshi_reads']} reads"
+                       f" + {self.stats['arb:bot_rows']} bot rows"
+                       + (f", {self.stats['arb:kalshi_429']} x429" if self.stats['arb:kalshi_429'] else ""))
             self.log(f"[status] bot {'up' if self.bot_alive else 'DOWN'} | {len(self.markets)} paired, watching "
                      f"{len(pm_live)} mkt / {len(self.sides)} outcome(s) | ws "
                      f"{'up' if self.ws is not None else 'down'} {rate:.0f} msg/s {kbs:.0f} KB/s | oracle "
                      f"{len(self.poll_tokens())} sel, poll p50 {p50:.0f}ms every {self.oracle.interval * 1000:.0f}ms"
                      f"{'' if self.oracle.session_ready else ' SESSION-DOWN'}"
-                     f"{f' err {self.oracle.errors}' if self.oracle.errors else ''} | candidates {cand} signals {sig} "
+                     f"{f' err {self.oracle.errors}' if self.oracle.errors else ''} | candidates {cand} signals {sig}{arb} "
                      f"| cpu {self.proc.cpu_percent(None) / 100:.2f} cores, "
                      f"{self.proc.memory_info().rss / 2 ** 20:.0f} MB")
 
@@ -1460,6 +1989,10 @@ class Shadow:
                      f" follow-ups {'/'.join(f'{x:g}' for x in self.cfg.followups)}s")
             loops = [self.bot_loop(), self.pairs_loop(), self.ws_loop(), self.oracle_loop(), self.snapshot_loop(),
                      self.status_loop()]
+            if self.cfg.arb:
+                loops += [self.arb_tail_loop(), self.arb_poll_loop()]
+                self.log(f"[start] cross-venue arb: Kalshi prices from the bot's own REST checks + Kalshi's PUBLIC "
+                         f"order book (max {self.cfg.arb_kalshi_rps:g}/s); windows -> PolyArbWindows_<day>.csv")
             tasks = [asyncio.create_task(c) for c in loops]
             try:
                 if minutes:
@@ -1471,7 +2004,18 @@ class Shadow:
                 for t in tasks + list(self.tasks):
                     t.cancel()
                 await asyncio.gather(*tasks, *self.tasks, return_exceptions=True)
-                for w in (self.tel, self.fu, self.snap):
+                # windows still open at shutdown are written as such - their duration is a lower bound - and closed
+                # ones still waiting for their delay check are written without it
+                for key in list(self.windows):
+                    w = self.windows.pop(key)
+                    w.update(close_w=time.time(), reason="shutdown", closed=True)
+                    w.setdefault("ad", None if w["ad_done"] else "n/a")
+                    self.arb_write(w)
+                for w in self.arb_pending:
+                    w.setdefault("ad", "n/a")
+                    self.arb_write(w)
+                self.arb_pending = []
+                for w in (self.tel, self.fu, self.snap, self.arb_csv):
                     w.close()
 
 

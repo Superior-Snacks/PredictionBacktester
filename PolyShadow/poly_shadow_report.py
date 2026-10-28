@@ -16,6 +16,8 @@ REST ask plus Polymarket's taker fee (rate x p(1-p), from each market's own fee 
   ORACLE DRIFT  Pinnacle's own P_true change by T+300 (clean 'open' readings); CUSHION = edge + drift
   MATCH-NEUTRAL T+60 -> T+300: Pinnacle's move minus Polymarket's mid move (match events cancel)
   SETTLEMENT    edge after fees at settlement, and wins vs the sum of P_true
+  ARB WINDOWS   Kalshi + Polymarket on the same match under $1 after both fees: how often, HOW LONG OPEN, margin,
+                size, whether the Polymarket leg survived its taker delay, which venue was the cheap one
 
 GAP BANDS (as the bot's resolve, sections 9/11/4f): CONVERGENCE, ORACLE DRIFT/CUSHION and the deep/filled settlement
 rows are printed pooled and then split at EV_GAP_BAND_CENTS (3c) - under it the core band, at or above it the wide
@@ -151,6 +153,7 @@ def main():
         snap = [r for r in snap if r["Sport"] == args.sport]
     if not tel and not snap:
         print(f"No shadow data in {data} yet. Is poly_shadow.py running?")
+        arb_windows(data, args)
         return
     days = sorted({r["Timestamp"][:10] for r in tel + snap})
     print(f"POLYMARKET SHADOW  {days[0]} .. {days[-1]}   {len(tel)} candidate row(s), {len(fu)} follow-up row(s), "
@@ -316,6 +319,79 @@ def main():
             settle_line(sp, "filled" if lab == "all" else f"  filled, {lab}",
                         [taken[k] for k in ks if taken[k] is not None and keep(taken[k])], at_fill,
                         "   (at the post-delay fill price)" if lab == "all" else "")
+
+    arb_windows(data, args)
+
+
+def arb_windows(data: Path, args):
+    """CROSS-VENUE ARB WINDOWS: one Kalshi side + the Polymarket outcome that completes it, under $1 after both taker
+    fees. How often they open, how long they stay open, what they were worth, and whether the Polymarket leg survived
+    its taker delay - the facts that decide whether there is anything to build here."""
+    arb = load(data, "PolyArbWindows", args.since)
+    if args.sport:
+        arb = [r for r in arb if r["Sport"] == args.sport]
+    print("\nCROSS-VENUE ARB WINDOWS (Kalshi + Polymarket on the same match, under $1 after both venues' taker fees)")
+    if not arb:
+        print("   none logged yet - the status line's 'arb ... closest' shows how near the pairs came")
+        return
+    for sp in sorted({r["Sport"] for r in arb}):
+        ws = [r for r in arb if r["Sport"] == sp]
+        durs = sorted(D(r, "DurationMs") / 1000 for r in ws)
+
+        def q(p):
+            return durs[min(len(durs) - 1, int(p * len(durs)))]
+
+        def share(s):
+            return 100 * sum(d >= s for d in durs) / len(durs)
+        print(f"   {sp.upper()}  {len(ws)} window(s) on {len({(r['KalshiTicker'], r['PolyAssetId']) for r in ws})} pair(s)"
+              f" in {len({r['EventTitle'] for r in ws})} match(es)")
+        print(f"      open for       median {q(.5):.1f}s  p75 {q(.75):.1f}s  p90 {q(.9):.1f}s  longest {durs[-1]:.1f}s   "
+              f"lasted >=1s {share(1):.0f}%  >=5s {share(5):.0f}%  >=30s {share(30):.0f}%")
+        print(f"      margin         at open {show([D(r, 'MarginOpenCents') for r in ws])}   "
+              f"best while open {show([D(r, 'MaxMarginCents') for r in ws])}")
+        shares = sorted(D(r, "ArbShares") for r in ws)
+        print(f"      size           median {shares[len(shares) // 2]:.0f} shares on both tops; "
+              f"${sum(D(r, 'ProfitOpenUsd') for r in ws if D(r, 'ProfitOpenUsd') == D(r, 'ProfitOpenUsd')):.2f} on the table at open, all windows")
+        print("      Polymarket leg after its taker delay: "
+              + ", ".join(f"{s} {n}" for s, n in Counter(r["PolyAfterDelay"] or "-" for r in ws).most_common()))
+        conf = [r for r in ws if r.get("KalshiConfirmed") in ("1", "True", "true")]
+        print(f"      CONFIRMED by a fresh Kalshi read: {len(conf)} of {len(ws)}   (the rest opened on a bot row up to 3s old"
+              " and never survived a fresh read - mostly a stale Kalshi price, not an arb)")
+        took = [r for r in conf if D(r, "DurationMs") >= 1000 and r["PolyAfterDelay"] == "FULL_AT_SEEN"]
+        print(f"      TAKEABLE (confirmed, open >= 1s, Polymarket leg still there after its delay): {len(took)} window(s), "
+              f"${sum(D(r, 'ProfitOpenUsd') for r in took):.2f} at open")
+        print(f"      who was off vs Pinnacle:  Kalshi leg {show([D(r, 'KalshiEdgeVsPinCents') for r in ws])}   "
+              f"Polymarket leg {show([D(r, 'PolyEdgeVsPinCents') for r in ws])}   (+ = that leg was the cheap one)")
+        ages = sorted(D(r, "KalshiAgeMsOpen") for r in ws)
+        print("      found by: " + ", ".join(f"{t} {n}" for t, n in Counter(r["Trigger"] for r in ws).most_common())
+              + f"   Kalshi price at open: " + ", ".join(f"{s} {n}" for s, n in Counter(r["KalshiSourceOpen"] for r in ws).most_common())
+              + f" (median {ages[len(ages) // 2]:.0f}ms old)")
+        flick = sum(1 for r in ws if r["ReopenGapMs"] and D(r, "ReopenGapMs") < 2000)
+        print("      closed by: " + ", ".join(f"{s} {n}" for s, n in Counter(r["CloseReason"] for r in ws).most_common())
+              + (f"   ({flick} re-opened within 2s of a close: one window flickering)" if flick else ""))
+        # WHAT MADE THE GAP: does a gap with no game event behind it (Pinnacle still for 10s+) stay open longer?
+        print("      by origin (Pinnacle's last price change at the open; quiet = none for 10s+):")
+        for org in ("PINNACLE_QUIET", "PINNACLE_MOVING", "UNKNOWN"):
+            g = [r for r in ws if r.get("Origin") == org]
+            if not g:
+                continue
+            dd = sorted(D(r, "DurationMs") / 1000 for r in g)
+            cf = sum(1 for r in g if r.get("KalshiConfirmed") in ("1", "True", "true"))
+            print(f"         {org:16} n={len(g):4}  open median {dd[len(dd) // 2]:.1f}s  >=1s "
+                  f"{100 * sum(d >= 1 for d in dd) / len(dd):.0f}%  >=5s {100 * sum(d >= 5 for d in dd) / len(dd):.0f}%  "
+                  f"confirmed {cf}  margin at open {show([D(r, 'MarginOpenCents') for r in g])}")
+        # LEG RISK: each order of execution, priced one taker delay after the open
+        kf = [D(r, "KalshiFirstMarginCents") for r in ws if r.get("KalshiFirstMarginCents")]
+        pf_n = sum(1 for r in ws if r.get("PolyAfterDelay") in ("FULL_AT_SEEN", "PARTIAL", "GONE"))
+        pf = [D(r, "PolyFirstMarginCents") for r in ws if r.get("PolyFirstMarginCents")]
+        if kf or pf:
+            print("      leg risk, priced 1 taker delay after the open:")
+            if kf:
+                print(f"         Kalshi first (instant), Polymarket a delay later:  {show(kf)}   locked in "
+                      f"{100 * sum(x > 0 for x in kf) / len(kf):.0f}%, a loss in {100 * sum(x < 0 for x in kf) / len(kf):.0f}%")
+            if pf_n:
+                print(f"         Polymarket first (a miss is free), then Kalshi:    filled {len(pf)} of {pf_n}"
+                      + (f"; when filled {show(pf)}, locked in {100 * sum(x > 0 for x in pf) / len(pf):.0f}%" if pf else ""))
 
 
 if __name__ == "__main__":
