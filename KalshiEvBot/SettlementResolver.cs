@@ -30,6 +30,10 @@ public sealed class SettlementResolver
     private readonly KalshiOrderClient _kalshi;
     private readonly SettlementStore _store;
     private Dictionary<string, SettlementRecord> _known;
+    // Guards _known. The settle loop writes it while the status line counts it from another thread, and a plain
+    // Dictionary that gains a key mid-count throws "Collection was modified" - on 2026-10-28 that silently ended
+    // the 30-second status line for the rest of the run. Nothing outside this class sees the live dictionary.
+    private readonly object _gate = new();
 
     public int Fetched { get; private set; }
     public int NewlyFinal { get; private set; }
@@ -45,13 +49,29 @@ public sealed class SettlementResolver
         _known  = _store.LoadLatest();
     }
 
-    public IReadOnlyDictionary<string, SettlementRecord> Known => _known;
+    /// <summary>A copy, safe to enumerate on any thread while the settle loop keeps writing.</summary>
+    public IReadOnlyDictionary<string, SettlementRecord> Known
+    {
+        get { lock (_gate) return new Dictionary<string, SettlementRecord>(_known, _known.Comparer); }
+    }
+
+    /// <summary>Final / gone / all records, counted under the lock: the status line's numbers, without a copy.</summary>
+    public (int Final, int Gone, int Total) Counts()
+    {
+        lock (_gate)
+        {
+            int fin = 0, gone = 0;
+            foreach (var r in _known.Values) { if (r.IsFinal) fin++; if (r.IsGone) gone++; }
+            return (fin, gone, _known.Count);
+        }
+    }
 
     /// <summary>Markets with no terminal record yet — the only ones still worth a request.</summary>
     public List<string> Pending(IEnumerable<string> tickers)
-        => tickers.Distinct(StringComparer.Ordinal)
-                  .Where(t => !(_known.TryGetValue(t, out var r) && r.Terminal))
-                  .ToList();
+    {
+        var all = tickers.Distinct(StringComparer.Ordinal).ToList();
+        lock (_gate) return all.Where(t => !(_known.TryGetValue(t, out var r) && r.Terminal)).ToList();
+    }
 
     /// <summary>
     /// Fetches one market and banks the answer. Returns the record, or null if the request failed in a way
@@ -73,11 +93,13 @@ public sealed class SettlementResolver
 
             // Only write when something CHANGED, or when it is terminal. An active market re-checked every
             // ten minutes for a fortnight would otherwise add two thousand identical lines per market.
-            bool known = _known.TryGetValue(ticker, out var prev);
+            bool known;
+            SettlementRecord? prev;
+            lock (_gate) known = _known.TryGetValue(ticker, out prev);
             if (!known || prev!.Status != rec.Status || prev.Result != rec.Result)
             {
                 _store.Append(rec);
-                _known[ticker] = rec;
+                lock (_gate) _known[ticker] = rec;
                 if (rec.IsFinal) NewlyFinal++;
             }
             return rec;
@@ -89,10 +111,12 @@ public sealed class SettlementResolver
             // than leave the market looking eternally pending.
             var rec = new SettlementRecord(ticker, "gone", "", "", "", "", "", DateTime.UtcNow,
                                            "HTTP 404 — Kalshi no longer serves this market");
-            if (!(_known.TryGetValue(ticker, out var prev) && prev.Terminal))
+            bool terminal;
+            lock (_gate) terminal = _known.TryGetValue(ticker, out var prev) && prev.Terminal;
+            if (!terminal)
             {
                 _store.Append(rec);
-                _known[ticker] = rec;
+                lock (_gate) _known[ticker] = rec;
                 Gone++;
                 Console.WriteLine($"[SETTLE] {ticker}: GONE from Kalshi with no result banked — "
                                 + "that observation is unrecoverable.");
@@ -121,8 +145,9 @@ public sealed class SettlementResolver
             await Task.Delay(120, ct);      // polite: a batch job, not a hot path
         }
         if (i >= 20) Console.WriteLine($"\r[SETTLE] {i}/{pending.Count} done.          ");
-        _known = _store.LoadLatest();
-        return _known;
+        var fresh = _store.LoadLatest();
+        lock (_gate) _known = fresh;
+        return new Dictionary<string, SettlementRecord>(fresh, fresh.Comparer);
     }
 
     /// <summary>
@@ -154,7 +179,7 @@ public sealed class SettlementResolver
                 if (NewlyFinal > before || Gone > gone)
                     Console.WriteLine($"[SETTLE] banked {NewlyFinal - before} new result(s)"
                                     + (Gone > gone ? $", {Gone - gone} market(s) went missing" : "")
-                                    + $" — {Known.Values.Count(r => r.IsFinal)} final on record");
+                                    + $" — {Counts().Final} final on record");
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { Console.WriteLine($"[SETTLE] watch error: {ex.GetType().Name}: {ex.Message}"); }

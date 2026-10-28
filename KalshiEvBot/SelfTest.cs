@@ -250,6 +250,26 @@ public static class SelfTest
             finally { try { Directory.Delete(dir, true); } catch { } }
         }
 
+        // ── Settlement counts ─────────────────────────────────────────────────────────────────────────
+        Console.WriteLine("\nSettlement counts");
+        {
+            string dir = Path.Combine(Path.GetTempPath(), "kalshievbot_settle_" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                Directory.CreateDirectory(dir);
+                var store = new SettlementStore(Path.Combine(dir, "ev_settlements.jsonl"));
+                store.Append(new SettlementRecord("A", "finalized", "yes", "", "", "", "", DateTime.UtcNow));
+                store.Append(new SettlementRecord("B", "gone", "", "", "", "", "", DateTime.UtcNow));
+                store.Append(new SettlementRecord("C", "active", "", "", "", "", "", DateTime.UtcNow));
+                var res = new SettlementResolver(null!, store);   // counts never touch the venue
+                var (fin, gone, all) = res.Counts();
+                Check(fin == 1 && gone == 1 && all == 3, "the status line's settled counts: 1 final, 1 gone, 1 pending",
+                      $"{fin}/{gone}/{all}");
+                Check(res.Known.Count == 3, "Known is a full copy");
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
         // ── Rolling CSV ───────────────────────────────────────────────────────────────────────────────
         Console.WriteLine("\nRolling CSV writer");
         {

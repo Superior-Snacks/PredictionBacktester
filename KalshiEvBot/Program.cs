@@ -1991,7 +1991,10 @@ internal static class Program
         while (!ct.IsCancellationRequested)
         {
             try { await Task.Delay(TimeSpan.FromSeconds(30), ct); } catch (OperationCanceledException) { break; }
-            PrintStatus(e, f, o, t, sn, r, pairsPath);
+            // One bad print must not end the loop: an exception here faulted the task with nothing said, and the
+            // status line was gone for the rest of the run (2026-10-28, a settlement-dictionary race).
+            try { PrintStatus(e, f, o, t, sn, r, pairsPath); }
+            catch (Exception ex) { Console.WriteLine($"[STATUS] skipped one: {ex.GetType().Name}: {ex.Message}"); }
         }
     }
 
@@ -2019,10 +2022,10 @@ internal static class Program
           + $"| rows {t.RowsWritten} | bankroll ${e.BankrollUsd:0.00}");
 
         var age = DateTime.UtcNow - SafeWriteTime(pairsPath);
-        int fin = r.Known.Values.Count(x => x.IsFinal), gone = r.Known.Values.Count(x => x.IsGone);
+        var (fin, gone, all) = r.Counts();
         Console.WriteLine(
             $"           snapshots {sn.RowsWritten} → {System.IO.Path.GetFileName(sn.Path)} "
-          + $"| settled {fin} final, {gone} gone, {r.Known.Count - fin - gone} pending "
+          + $"| settled {fin} final, {gone} gone, {all - fin - gone} pending "
           + $"| pairfile written {(age.TotalDays > 365 ? "never" : $"{age.TotalMinutes:0}m ago")} "
           + $"| telemetry → {System.IO.Path.GetFileName(t.Path)}");
         // The venue's own socket report. Quote age cannot distinguish a quiet market from a dead feed;

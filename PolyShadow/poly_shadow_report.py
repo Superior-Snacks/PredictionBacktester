@@ -360,8 +360,9 @@ def arb_windows(data: Path, args):
         took = [r for r in conf if D(r, "DurationMs") >= 1000 and r["PolyAfterDelay"] == "FULL_AT_SEEN"]
         print(f"      TAKEABLE (confirmed, open >= 1s, Polymarket leg still there after its delay): {len(took)} window(s), "
               f"${sum(D(r, 'ProfitOpenUsd') for r in took):.2f} at open")
-        print(f"      who was off vs Pinnacle:  Kalshi leg {show([D(r, 'KalshiEdgeVsPinCents') for r in ws])}   "
-              f"Polymarket leg {show([D(r, 'PolyEdgeVsPinCents') for r in ws])}   (+ = that leg was the cheap one)")
+        # a phantom's "cheap leg" is just the stale Kalshi price, so this reads the confirmed windows only
+        print(f"      who was off vs Pinnacle (confirmed):  Kalshi leg {show([D(r, 'KalshiEdgeVsPinCents') for r in conf])}   "
+              f"Polymarket leg {show([D(r, 'PolyEdgeVsPinCents') for r in conf])}   (+ = that leg was the cheap one)")
         ages = sorted(D(r, "KalshiAgeMsOpen") for r in ws)
         print("      found by: " + ", ".join(f"{t} {n}" for t, n in Counter(r["Trigger"] for r in ws).most_common())
               + f"   Kalshi price at open: " + ", ".join(f"{s} {n}" for s, n in Counter(r["KalshiSourceOpen"] for r in ws).most_common())
@@ -380,12 +381,15 @@ def arb_windows(data: Path, args):
             print(f"         {org:16} n={len(g):4}  open median {dd[len(dd) // 2]:.1f}s  >=1s "
                   f"{100 * sum(d >= 1 for d in dd) / len(dd):.0f}%  >=5s {100 * sum(d >= 5 for d in dd) / len(dd):.0f}%  "
                   f"confirmed {cf}  margin at open {show([D(r, 'MarginOpenCents') for r in g])}")
-        # LEG RISK: each order of execution, priced one taker delay after the open
-        kf = [D(r, "KalshiFirstMarginCents") for r in ws if r.get("KalshiFirstMarginCents")]
-        pf_n = sum(1 for r in ws if r.get("PolyAfterDelay") in ("FULL_AT_SEEN", "PARTIAL", "GONE"))
-        pf = [D(r, "PolyFirstMarginCents") for r in ws if r.get("PolyFirstMarginCents")]
+        # LEG RISK: each order of execution, priced one taker delay after the open. Confirmed windows only: a phantom
+        # opened on a stale Kalshi price, so "Kalshi first" would buy at a price that was never there and "Polymarket
+        # first" would be graded against the real price one second later - both orders misread, in opposite directions.
+        kf = [D(r, "KalshiFirstMarginCents") for r in conf if r.get("KalshiFirstMarginCents")]
+        pf_n = sum(1 for r in conf if "PolyFirstMarginCents" in r      # rows from before the leg-risk columns don't count
+                   and r.get("PolyAfterDelay") in ("FULL_AT_SEEN", "PARTIAL", "GONE"))
+        pf = [D(r, "PolyFirstMarginCents") for r in conf if r.get("PolyFirstMarginCents")]
         if kf or pf:
-            print("      leg risk, priced 1 taker delay after the open:")
+            print("      leg risk, priced 1 taker delay after the open (confirmed windows):")
             if kf:
                 print(f"         Kalshi first (instant), Polymarket a delay later:  {show(kf)}   locked in "
                       f"{100 * sum(x > 0 for x in kf) / len(kf):.0f}%, a loss in {100 * sum(x < 0 for x in kf) / len(kf):.0f}%")
