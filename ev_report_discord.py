@@ -146,6 +146,25 @@ SCRIPTS = {
 }
 
 
+# THE FORWARD TEST, DAILY UNTIL ITS DECISION (user, 2026-10-28: check the cushion daily until Nov 6). One line with
+# the end-of-day drop - progress, the running cushion since registration, today's - and nothing after this date.
+FORWARD_DAILY_UNTIL = dt.date(2026, 11, 7)
+
+
+def forward_line(root: str, today: "dt.date | None" = None) -> str:
+    if (today or dt.date.today()) > FORWARD_DAILY_UNTIL:
+        return ""
+    path = os.path.join(root, "ev_forward_test.py")
+    if not os.path.exists(path):
+        return ""
+    try:
+        p = subprocess.run([sys.executable, path, "--line"], cwd=root, capture_output=True, timeout=900)
+    except Exception as e:
+        return f"🧪 forward test: could not run ({type(e).__name__})"
+    s = (p.stdout or b"").decode("utf-8", "replace").strip().splitlines()
+    return ("🧪 " + s[-1]) if s else ""
+
+
 REMINDERS_FILE = "ev_reminders.json"
 
 
@@ -621,8 +640,11 @@ def main() -> int:
     # the digest on request.
     if a.full:
         fl = fills_line(a.root)
+        fwd = forward_line(a.root)
         due = reminders_due(a.root)
         print(fl)
+        if fwd:
+            print(fwd)
         for r in due:
             print(r)
         if a.dry:
@@ -637,6 +659,8 @@ def main() -> int:
         if not ok:
             print("[DISCORD] attachment FAILED.")
         ok = post(url, fl) and ok
+        if fwd:
+            ok = post(url, fwd) and ok
         for r in due:
             ok = post(url, r) and ok
         print("[DISCORD] posted." if ok else "[DISCORD] post FAILED.")

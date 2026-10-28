@@ -6,6 +6,7 @@ first N clean readings in entry order (N = first_n, then extend_to_n), so runnin
 Read-only; nothing here changes what the bot trades.
 
     python ev_forward_test.py           # or `ev forward` in Discord
+    python ev_forward_test.py --line    # one summary line (the end-of-day Discord drop posts it daily)
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ import csv
 import datetime as dt
 import glob
 import hashlib
+import io
 import json
 import math
 import os
@@ -63,6 +65,12 @@ def slope(pts):
 
 def main() -> int:
     import sys
+    # --line: the full output is still produced (so the verdict logic runs exactly as always), just captured, and
+    # one summary line is printed in its place.
+    line_mode = "--line" in sys.argv
+    real_stdout = sys.stdout
+    if line_mode:
+        sys.stdout = io.StringIO()
     path = RULES
     if "--rules" in sys.argv:                          # a scratch copy, to replay old data; never the registered file
         path = sys.argv[sys.argv.index("--rules") + 1]
@@ -137,6 +145,9 @@ def main() -> int:
         print(f"   {label}")
         print(f"      give-back at 5 min   {fmt(gb)}   (normal {rules['hypotheses']['normal_cents']:+.1f}c, "
               f"streak {rules['hypotheses']['streak_cents']:+.1f}c); mean gap bought {mean_se(g)[0]:+.2f}c")
+        # DISPLAY ONLY (added 2026-10-28; no rule reads it): the number the user follows day to day.
+        print(f"      cushion (gap + give-back) {fmt([x[1] + x[2] for x in sample])}   "
+              f"(before 10-20 about +2c, the 10-20 streak about 0c)")
         tt = b / se if se == se and se > 0 else float("nan")
         print(f"      gap gradient         {b:+.2f} +/-{se:.2f} per cent of gap (t={tt:+.1f})   "
               f"(before 10-20 {grad['before_slope']:+.2f}, streak {grad['streak_slope']:+.2f})")
@@ -194,6 +205,22 @@ def main() -> int:
             worth = ch == ch and sh == sh and sh > 0 and ch < 0 and ch / sh <= -1.5 and cl > 0
             print("   gap rule: " + ("worth a live test" if worth else "not supported by this data"))
 
+    # BY DAY - DISPLAY ONLY (added 2026-10-28 for the daily check; no rule reads it). Days are UTC, by entry time.
+    by_day = defaultdict(list)
+    for x in obs:
+        by_day[x[0][:10]].append(x[1] + x[2])
+    if by_day:
+        print("   BY DAY (display only; one day is about +/-2c of noise, so read the running total):")
+        run = []
+        for d in sorted(by_day):
+            v = by_day[d]
+            run += v
+            m, se = mean_se(v)
+            rm, rse = mean_se(run)
+            tail = " (from 16:30)" if d == start[:10] else ""
+            print(f"      {d[5:]}{tail:<13} cushion {m:+6.2f}" + (f" +/-{se:4.2f}" if se == se else " " * 8)
+                  + f" (n={len(v):2})   running {rm:+.2f}" + (f" +/-{rse:.2f}" if rse == rse else "") + f" (n={len(run)})")
+
     # settlement on new fills - supporting only
     res = {}
     try:
@@ -235,6 +262,23 @@ def main() -> int:
     else:
         print(f"   settled live fills since registration: none yet ({pend} pending)")
     print("   Rules: ev_forward_test.json. Nothing here changes what the bot trades.")
+
+    if line_mode:
+        full = sys.stdout.getvalue()
+        sys.stdout = real_stdout
+        cm, cs = mean_se([x[1] + x[2] for x in obs])
+        tv = [x[1] + x[2] for x in obs if x[0][:10] == today.strftime("%Y-%m-%d")]
+        tm, ts = mean_se(tv)
+        verdict = next((ln.strip() for ln in full.splitlines() if ln.strip().startswith("VERDICT:")), "")
+        when = ""
+        if not verdict and rate > 0:
+            target = dec["first_n"] if n < dec["first_n"] else dec["extend_to_n"]
+            when = f" (decision ~{(t0 + dt.timedelta(days=target / rate)):%a %b %d})"
+        head = verdict if verdict else f"forward test {n}/{dec['first_n'] if n < dec['first_n'] else dec['extend_to_n']}{when}"
+        cush = "cushion n/a" if cm != cm else (f"cushion since registration {cm:+.2f}c" + (f" +/-{cs:.2f}" if cs == cs else "")
+                                                + f" (n={n}; before 10-20 about +2c, streak about 0c)")
+        day = f"today {tm:+.2f}c (n={len(tv)})" if tv else "today: no readings yet"
+        print(f"{head} | {cush} | {day}")
     return 0
 
 
