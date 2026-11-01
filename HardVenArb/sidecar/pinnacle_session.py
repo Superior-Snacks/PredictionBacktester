@@ -458,6 +458,13 @@ class PinnacleBrowserSession:
         print("=" * 78 + "\n")
         await self._open_test_tabs()                     # PINNACLE_TAB_TEST: multi-tab background-WS survival test
 
+    def open_pages(self) -> list:
+        """Every tab of the running browser (empty when the site is dark) - for the maintenance screenshot."""
+        try:
+            return list(self._ctx.pages) if self._ctx is not None else []
+        except Exception:
+            return []
+
     async def stop(self) -> None:
         for t in (self._activity_task, self._status_task, self._session_refresh_task, self._login_task,
                   self._probe_task):

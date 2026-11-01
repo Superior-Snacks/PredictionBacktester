@@ -961,6 +961,9 @@ class PinnacleAdapter(BookAdapter):
             maintenance.on_enter(lambda: self._browser and self._browser.pause_activity())
             maintenance.on_enter(lambda: self._lifecycle and self._lifecycle.maintenance_close())
             maintenance.on_exit(lambda: self._browser and self._browser.resume_activity())
+            # ...and lift the lifecycle's maintenance close, or a 200 mid-window leaves the site dark until that
+            # window's close (2026-11-01: back at 12:00, dark until 14:13).
+            maintenance.on_exit(lambda: self._lifecycle and self._lifecycle.maintenance_release())
         # Betslip hygiene sweep: clears stray selections on every tab, independent of organic cadence.
         if self._betslip_trim and self._session_source == "browser":
             self._betslip_task = asyncio.create_task(self._betslip_sweep_loop())
@@ -3564,7 +3567,7 @@ class PinnacleAdapter(BookAdapter):
             self._last_http_status = None
             return None
         self._last_http_status = r.status_code          # read by _league_pass (stop at the first venue 5xx)
-        maintenance.note_status(r.status_code, f"GUEST GET {path}")   # 5xx latches, 200 releases
+        maintenance.note_status(r.status_code, f"GUEST GET {path}", r)   # 5xx latches, 200 releases
         if r.status_code != 200:
             print(f"[PINNACLE] GUEST GET {path} HTTP {r.status_code}")
             return None

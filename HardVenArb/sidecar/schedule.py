@@ -764,7 +764,7 @@ def _guest(client: httpx.Client, path: str):
         r = client.get(GUEST_BASE + path)
     except Exception:
         return None
-    maintenance.note_status(r.status_code, f"slate {path}")     # the lifecycle's slate fetch doubles as a probe
+    maintenance.note_status(r.status_code, f"slate {path}", r)  # the lifecycle's slate fetch doubles as a probe
     return r.json() if r.status_code == 200 else None
 
 

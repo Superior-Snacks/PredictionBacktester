@@ -14,6 +14,7 @@ Disabled (no-op) when DISCORD_WEBHOOK_URL is unset, so nothing here is required 
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 
 import httpx
@@ -52,6 +53,32 @@ class Notifier:
             self._fails += 1
             if self._fails in (1, 10) or self._fails % 50 == 0:
                 print(f"[NOTIFY] discord send failed x{self._fails}: {type(ex).__name__}: {ex}")
+            return False
+
+    async def send_file(self, message: str, path: str) -> bool:
+        """Post one message with a file attached (a screenshot). Same contract as send(): never raises, False on
+        any failure."""
+        if not self._url:
+            return False
+        content = self._prefix + message
+        if len(content) > _MAX:
+            content = content[:_MAX] + "…"
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+            async with httpx.AsyncClient(timeout=20.0) as c:
+                r = await c.post(self._url, data={"payload_json": json.dumps({"content": content})},
+                                 files={"files[0]": (os.path.basename(path), data)})
+            if r.status_code >= 300:
+                self._fails += 1
+                if self._fails in (1, 10) or self._fails % 50 == 0:
+                    print(f"[NOTIFY] discord file HTTP {r.status_code} (x{self._fails})")
+                return False
+            return True
+        except Exception as ex:
+            self._fails += 1
+            if self._fails in (1, 10) or self._fails % 50 == 0:
+                print(f"[NOTIFY] discord file send failed x{self._fails}: {type(ex).__name__}: {ex}")
             return False
 
     def send_bg(self, message: str) -> None:

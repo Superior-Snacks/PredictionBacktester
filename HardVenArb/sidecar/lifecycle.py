@@ -530,6 +530,10 @@ class PinnacleLifecycle:
             print("[PINNACLE LIFECYCLE] window OPEN → browser up.")
             self._alert_open(cur, now)
         elif not inside and self._open:
+            if self._override == "maintenance":
+                # Before the browser goes: what was the site actually showing? (see maintenance.py EVIDENCE)
+                pages = getattr(self._browser, "open_pages", lambda: [])()
+                await maintenance.capture_pages(pages)
             await self._browser.stop()
             self._open = False
             self._burn_uptime(now)               # bank this session against today's cap BEFORE the next replan
@@ -774,6 +778,28 @@ class PinnacleLifecycle:
         except RuntimeError:
             if loop is not None:
                 loop.call_soon_threadsafe(self._wake.set)
+
+    def maintenance_release(self) -> None:
+        """Called (from any thread) when the venue answers 200 again: lift the maintenance close so the CURRENT
+        window opens now instead of waiting out its close. Idempotent; a no-op unless a maintenance close is set.
+
+        2026-11-01: the 09:15 re-check got a 503 and set this override until the window's 14:13 close. The 12:00
+        replan's slate fetch then got a 200 and the latch logged "maintenance OVER. Releasing holds" - but the
+        only exit hook resumed the organic layer. This override stayed, so the site sat dark until 14:13 for a
+        block the venue had already come back for."""
+        loop = getattr(self, "_loop", None)
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:                         # the slate fetch's worker thread: do it on the loop
+            if loop is not None:
+                loop.call_soon_threadsafe(self.maintenance_release)
+            return
+        if self._override != "maintenance":
+            return
+        self._set_override(None, "", persist=False)
+        print("[PINNACLE LIFECYCLE] venue back - maintenance close lifted; the current window (if any) opens now.",
+              flush=True)
+        self._wake.set()                             # re-tick now: inside the window -> open
 
     def _is_pinned(self, window) -> bool:
         """Does this (possibly merged/jittered) window overlap an operator-pinned span?"""
