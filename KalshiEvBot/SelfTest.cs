@@ -261,13 +261,101 @@ public static class SelfTest
                 store.Append(new SettlementRecord("A", "finalized", "yes", "", "", "", "", DateTime.UtcNow));
                 store.Append(new SettlementRecord("B", "gone", "", "", "", "", "", DateTime.UtcNow));
                 store.Append(new SettlementRecord("C", "active", "", "", "", "", "", DateTime.UtcNow));
+                store.Append(new SettlementRecord("D", "finalized", "scalar", "", "", "", "", DateTime.UtcNow));
                 var res = new SettlementResolver(null!, store);   // counts never touch the venue
-                var (fin, gone, all) = res.Counts();
-                Check(fin == 1 && gone == 1 && all == 3, "the status line's settled counts: 1 final, 1 gone, 1 pending",
-                      $"{fin}/{gone}/{all}");
-                Check(res.Known.Count == 3, "Known is a full copy");
+                var (fin, walk, gone, all) = res.Counts();
+                Check(fin == 1 && walk == 1 && gone == 1 && all == 4,
+                      "the status line's settled counts: 1 final, 1 walkover, 1 gone, 1 pending",
+                      $"{fin}/{walk}/{gone}/{all}");
+                Check(res.Known.Count == 4, "Known is a full copy");
             }
             finally { try { Directory.Delete(dir, true); } catch { } }
+        }
+
+        // ── Walkovers and Kalshi's historical archive (2026-11-04) ────────────────────────────────────
+        // The report's red "LOST: 23" was 23 walkovers: banked as finalized/scalar months earlier, never
+        // terminal, re-asked until Kalshi's live lookup forgot them (~65 days after settlement), and that 404
+        // written down as a lost market. The archive still had every one of them.
+        Console.WriteLine("\nWalkovers and the historical archive");
+        {
+            DateTime now = DateTime.UtcNow;
+            var walk = new SettlementRecord("W", "finalized", "scalar", "", "", "", "", now, SettlementValue: "0.7300");
+            Check(walk.IsWalkover && !walk.IsFinal && walk.Terminal && walk.WonFor("YES") is null,
+                  "a finalized walkover is over (terminal) but has no winner to grade");
+            var walkDet = walk with { Status = "determined" };
+            Check(walkDet.IsWalkover && !walkDet.Terminal, "a DETERMINED walkover is still re-checked, like any determined market");
+            var legacyGone = new SettlementRecord("G", "gone", "", "", "", "", "", now, "HTTP 404 — Kalshi no longer serves this market");
+            Check(legacyGone.IsGone && !legacyGone.Terminal, "an old gone record (live lookup only) is asked again");
+            var checkedGone = legacyGone with { Source = SettlementRecord.SourceNeither };
+            Check(checkedGone.Terminal, "a gone record confirmed by both lookups is terminal");
+
+            static Task<System.Text.Json.JsonDocument> Market(string status, string result, string value)
+                => Task.FromResult(System.Text.Json.JsonDocument.Parse(
+                    $"{{\"market\":{{\"status\":\"{status}\",\"result\":\"{result}\",\"settlement_value_dollars\":\"{value}\"}}}}"));
+            static Task<System.Text.Json.JsonDocument> NotFound()
+                => Task.FromException<System.Text.Json.JsonDocument>(
+                    new HttpRequestException("Kalshi GET 404", null, System.Net.HttpStatusCode.NotFound));
+            static Task<System.Text.Json.JsonDocument> ServerError()
+                => Task.FromException<System.Text.Json.JsonDocument>(
+                    new HttpRequestException("Kalshi GET 503", null, System.Net.HttpStatusCode.ServiceUnavailable));
+
+            string dir = Path.Combine(Path.GetTempPath(), "kalshievbot_archive_" + Guid.NewGuid().ToString("N"));
+            var save = Console.Out;
+            try
+            {
+                Directory.CreateDirectory(dir);
+                var path = Path.Combine(dir, "ev_settlements.jsonl");
+                var store = new SettlementStore(path);
+                store.Append(legacyGone);                                                      // G: an old false loss
+                store.Append(new SettlementRecord("K", "determined", "yes", "", "", "", "", now));  // K: answer banked
+                store.Append(walk);                                                            // W: finished walkover
+                int liveCalls = 0, archiveCalls = 0;
+                var answers = new Dictionary<string, Func<Task<System.Text.Json.JsonDocument>>>
+                {
+                    ["G"] = () => Market("finalized", "scalar", "0.7300"),    // the archive has it
+                    ["L"] = () => Market("finalized", "no", "0.0000"),
+                    ["K"] = NotFound,
+                    ["X"] = NotFound,
+                };
+                var res = new SettlementResolver(
+                    t => { liveCalls++; return t == "L" ? Market("finalized", "yes", "1.0000")
+                                             : t == "E" ? ServerError() : NotFound(); },
+                    t => { archiveCalls++; return answers.TryGetValue(t, out var a) ? a() : NotFound(); },
+                    store);
+                Check(!res.Pending(new[] { "W" }).Any(), "a finalized walkover is never asked again");
+                Check(res.Pending(new[] { "G" }).Count == 1, "...an old gone record is");
+
+                Console.SetOut(TextWriter.Null);                 // the resolver's own log lines are not the test
+                var g = res.FetchAndStoreAsync("G").GetAwaiter().GetResult();
+                var l = res.FetchAndStoreAsync("L").GetAwaiter().GetResult();
+                var x = res.FetchAndStoreAsync("X").GetAwaiter().GetResult();
+                var k = res.FetchAndStoreAsync("K").GetAwaiter().GetResult();
+                var e = res.FetchAndStoreAsync("E").GetAwaiter().GetResult();
+                Console.SetOut(save);
+
+                Check(g is { IsWalkover: true, Terminal: true, Source: SettlementRecord.SourceArchive, SettlementValue: "0.7300" },
+                      "live 404 -> the archive answers: the old false loss becomes a walkover at its fair price",
+                      $"{g?.Status}/{g?.Result}/{g?.Source}/{g?.SettlementValue}");
+                Check(l is { IsFinal: true, Source: SettlementRecord.SourceLive, SettlementValue: "1.0000" }
+                      && liveCalls == 5 && archiveCalls == 3,
+                      "every market is asked live first; only a live 404 goes on to the archive",
+                      $"live {liveCalls}, archive {archiveCalls}");
+                Check(x is { IsGone: true, Terminal: true, Source: SettlementRecord.SourceNeither } && res.Gone == 1,
+                      "a 404 from BOTH lookups is the one real loss", $"{x?.Status}/{x?.Source} gone={res.Gone}");
+                Check(k is { Status: "determined", Result: "yes" }, "a banked result outlives the venue forgetting it",
+                      $"{k?.Status}/{k?.Result}");
+                Check(e is null && res.Failed == 1, "a 5xx is retried later, never recorded");
+                Check(res.Archived == 1, "the archive answers are counted", $"{res.Archived}");
+
+                var back = new SettlementStore(path).LoadLatest();
+                Check(back["G"] is { IsWalkover: true, SettlementValue: "0.7300", Source: SettlementRecord.SourceArchive },
+                      "the store keeps the settlement value and the source");
+                Check(back["K"] is { Status: "determined" } && !back.ContainsKey("E"),
+                      "nothing was written over the banked result, nothing for the 5xx");
+                Check(back["X"].IsGone && File.ReadAllLines(path).Length == 6,
+                      "append-only: 3 seeded + G + L + X", $"{File.ReadAllLines(path).Length} line(s)");
+            }
+            finally { Console.SetOut(save); try { Directory.Delete(dir, true); } catch { } }
         }
 
         // ── Rolling CSV ───────────────────────────────────────────────────────────────────────────────

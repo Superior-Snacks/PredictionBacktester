@@ -2305,8 +2305,15 @@ public static class Calibration
         // are not in these files.
         var mine = all.Select(o => o.Ticker).Distinct(StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
         int distinctTickers = mine.Count;
-        int active = settled.Where(kv => mine.Contains(kv.Key)).Count(kv => !kv.Value.Terminal);
-        int lost   = settled.Where(kv => mine.Contains(kv.Key)).Count(kv => kv.Value.IsGone);
+        var mineRecs = settled.Where(kv => mine.Contains(kv.Key)).Select(kv => kv.Value).ToList();
+        // "Still active" = no answer of any kind yet. A walkover IS an answer - no ball played, Kalshi settled
+        // it at a fair price - it just has no winner to grade; counted as pending, 233 finished markets looked
+        // open (2026-11-04). Its observations are counted apart, never graded.
+        int active  = mineRecs.Count(r => !(r.IsFinal || r.IsWalkover || r.IsGone));
+        int walkMkt = mineRecs.Count(r => r.IsWalkover);
+        int walkObs = obs.Count(o => !o.Won.HasValue && settled.TryGetValue(o.Ticker, out var r) && r.IsWalkover);
+        int lost    = mineRecs.Count(r => r.IsGone && r.Terminal);       // neither the live lookup nor the archive
+        int unasked = mineRecs.Count(r => r.IsGone && !r.Terminal);      // an old gone the archive missed this run
         Console.WriteLine($"\n1. COVERAGE");
         Console.WriteLine($"   {all.Count} logged row(s) → {obs.Count} independent observation(s) "
                         + $"({(dedupe ? "one per ticker+side" : "NOT deduped")}) across {distinctTickers} market(s)");
@@ -2346,8 +2353,12 @@ public static class Calibration
                                 + "a miss that was ours or Kalshi's, not the book's (section 7 still counts the attempts).");
             Console.ResetColor();
         }
-        Console.WriteLine($"   settled: {graded.Count}   awaiting settlement: {obs.Count - graded.Count} "
+        Console.WriteLine($"   settled: {graded.Count}   walkover: {walkObs}   "
+                        + $"awaiting settlement: {obs.Count - graded.Count - walkObs} "
                         + $"({active} market(s) still active)");
+        if (walkMkt > 0)
+            Console.WriteLine($"   walkover = {walkMkt} market(s) where no ball was played: Kalshi settled them at a "
+                            + "fair price, so there is no winner to grade.");
 
         // ── ORIENTATION SANITY: are the pairs behind these numbers pointing at the right player? ──────
         // EVERY FIGURE BELOW ASSUMES THE PAIRING IS SOUND. A flipped pair - Pinnacle token naming the
@@ -2367,10 +2378,15 @@ public static class Calibration
             // Not a rounding error in the sample — it is data that can never be recovered, so it is stated
             // outright rather than absorbed into "awaiting settlement" where it would look like patience.
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"   LOST: {lost} market(s) are GONE from Kalshi with no result ever banked — "
-                            + "those observations are unrecoverable.");
-            Console.WriteLine("   Keep the bot running (it banks settlements every EV_SETTLE_POLL_MIN minutes) "
-                            + "rather than relying on --resolve after the fact.");
+            Console.WriteLine($"   LOST: {lost} market(s) Kalshi has no record of - its live lookup and its historical "
+                            + "archive both answer 404 - with no result ever banked. Those observations are unrecoverable.");
+            Console.ResetColor();
+        }
+        if (unasked > 0)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkYellow;
+            Console.WriteLine($"   {unasked} market(s) marked gone before 2026-11-04 asked only the live lookup, and the "
+                            + "archive could not be asked about them this run - the next --resolve asks again.");
             Console.ResetColor();
         }
         if (graded.Count == 0)

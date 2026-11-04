@@ -854,8 +854,10 @@ internal static class Program
         var resolver = new SettlementResolver(kalshi);
         int alreadyKnown = resolver.Known.Values.Count(r => r.Terminal);
         var settled  = await resolver.ResolveAsync(tickers);
-        Console.WriteLine($"[RESOLVE] {resolver.Fetched} fetched, {alreadyKnown} already on record, "
+        Console.WriteLine($"[RESOLVE] {resolver.Fetched} fetched ({resolver.Archived} from Kalshi's historical archive), "
+                        + $"{alreadyKnown} already on record, "
                         + $"{resolver.Failed} failed; {settled.Values.Count(s => s.IsFinal)} final, "
+                        + $"{settled.Values.Count(s => s.IsWalkover)} walkover, "
                         + $"{settled.Values.Count(s => s.IsGone)} gone from the venue.");
         Console.WriteLine($"[RESOLVE] permanent record: {resolver.Store.Path}");
 
@@ -1056,13 +1058,12 @@ internal static class Program
             Console.WriteLine("[verify] polling settlements…");
             var tick = pairs.Select(p => p.KalshiTicker).Distinct(StringComparer.Ordinal).ToList();
             await resolver.ResolveAsync(tick, ct);
-            int fin = resolver.Known.Values.Count(r => r.IsFinal);
-            int gone = resolver.Known.Values.Count(r => r.IsGone);
+            var (fin, walk, gone, all) = resolver.Counts();
             if (!File.Exists(resolver.Store.Path))
                 Fail("settlement store", "no ev_settlements.jsonl was written");
             else
-                Pass("settlement store", $"{fin} final, {gone} gone, "
-                                       + $"{resolver.Known.Count - fin - gone} still active → "
+                Pass("settlement store", $"{fin} final, {walk} walkover, {gone} gone, "
+                                       + $"{all - fin - walk - gone} still active → "
                                        + System.IO.Path.GetFileName(resolver.Store.Path));
         });
 
@@ -2022,10 +2023,10 @@ internal static class Program
           + $"| rows {t.RowsWritten} | bankroll ${e.BankrollUsd:0.00}");
 
         var age = DateTime.UtcNow - SafeWriteTime(pairsPath);
-        var (fin, gone, all) = r.Counts();
+        var (fin, walk, gone, all) = r.Counts();
         Console.WriteLine(
             $"           snapshots {sn.RowsWritten} → {System.IO.Path.GetFileName(sn.Path)} "
-          + $"| settled {fin} final, {gone} gone, {all - fin - gone} pending "
+          + $"| settled {fin} final, {walk} walkover, {gone} gone, {all - fin - walk - gone} pending "
           + $"| pairfile written {(age.TotalDays > 365 ? "never" : $"{age.TotalMinutes:0}m ago")} "
           + $"| telemetry → {System.IO.Path.GetFileName(t.Path)}");
         // The venue's own socket report. Quote age cannot distinguish a quiet market from a dead feed;

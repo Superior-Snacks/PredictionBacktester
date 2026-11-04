@@ -10,8 +10,15 @@ namespace KalshiEvBot;
 /// </summary>
 public sealed record SettlementRecord(
     string Ticker, string Status, string Result, string Title, string EventTicker,
-    string CloseTime, string ExpectedExpiration, DateTime AtUtc, string Note = "")
+    string CloseTime, string ExpectedExpiration, DateTime AtUtc, string Note = "",
+    string SettlementValue = "", string Source = "")
 {
+    /// <summary><see cref="Source"/>: which of Kalshi's two lookups answered. Kalshi's live
+    /// <c>/markets/{ticker}</c> stops answering about 65 days after a market settles, while
+    /// <c>/historical/markets/{ticker}</c> keeps the full record (measured 2026-11-04). Records from before
+    /// then carry no source.</summary>
+    public const string SourceLive = "live", SourceArchive = "historical", SourceNeither = "live+historical 404";
+
     /// <summary>The outcome is KNOWN and gradeable. Kalshi decides a market before it settles it, so
     /// <c>determined</c> already carries the answer — measured 2026-08-23: five markets sat at
     /// <c>determined</c> with a valid result while this property required <c>finalized</c>, so five known
@@ -19,14 +26,25 @@ public sealed record SettlementRecord(
     public bool IsFinal => (Status == "finalized" || Status == "determined")
                         && (Result == "yes" || Result == "no");
 
-    /// <summary>Kalshi no longer serves this market. The outcome is unrecoverable from the venue.</summary>
+    /// <summary>A WALKOVER: no ball was played, so Kalshi settled the market at a fair price
+    /// (<c>result: "scalar"</c>, the price in <see cref="SettlementValue"/> — 0.73, 0.56 and 0.15 seen) instead
+    /// of yes/no. There is no winner to grade, so it is never <see cref="IsFinal"/>, but it IS over. Until
+    /// 2026-11-04 nothing treated it as over: each one was re-asked on every pass until the live lookup forgot
+    /// it, and that 404 was then recorded as a lost market (23 of them, every one a walkover).</summary>
+    public bool IsWalkover => (Status == "finalized" || Status == "determined") && Result == "scalar";
+
+    /// <summary>Kalshi has no record of this market. Since 2026-11-04 that means neither lookup has it
+    /// (<see cref="SourceNeither"/>) — the only genuinely lost observation. An older gone record asked only the
+    /// live lookup, so it is not <see cref="Terminal"/>: the resolver asks the archive once.</summary>
     public bool IsGone  => Status == "gone";
 
     /// <summary>Never ask again. DELIBERATELY NARROWER THAN <see cref="IsFinal"/>: a <c>determined</c>
     /// market is gradeable but not yet settled, and Kalshi could still void or re-determine it. Keeping it
     /// non-terminal means the resolver re-checks until it truly finalizes, so a reversal is caught rather
-    /// than frozen into the record — while the result is still available to grade in the meantime.</summary>
-    public bool Terminal => (Status == "finalized" && (Result == "yes" || Result == "no")) || IsGone;
+    /// than frozen into the record — while the result is still available to grade in the meantime.
+    /// A finalized walkover is terminal like any finalized market.</summary>
+    public bool Terminal => (Status == "finalized" && (Result == "yes" || Result == "no" || Result == "scalar"))
+                         || (IsGone && Source == SourceNeither);
 
     /// <summary>Did the side we would have bought win? Null while unresolved or unrecoverable.</summary>
     public bool? WonFor(string side)
@@ -93,6 +111,7 @@ public sealed class SettlementStore
             event_ticker = r.EventTicker, close_time = r.CloseTime,
             expected_expiration_time = r.ExpectedExpiration,
             at = r.AtUtc.ToString("o", CultureInfo.InvariantCulture), note = r.Note,
+            settlement_value = r.SettlementValue, source = r.Source,
         };
         lock (_lock)
         {
@@ -123,7 +142,8 @@ public sealed class SettlementStore
                 DateTime.TryParse(S("at"), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at);
                 outp[ticker] = new SettlementRecord(ticker, S("status"), S("result"), S("title"),
                                                     S("event_ticker"), S("close_time"),
-                                                    S("expected_expiration_time"), at, S("note"));
+                                                    S("expected_expiration_time"), at, S("note"),
+                                                    S("settlement_value"), S("source"));
             }
             catch (JsonException) { /* skip the bad line, keep the history */ }
         }

@@ -184,6 +184,15 @@ public class KalshiOrderClient : IKalshiOrderExecutor, IDisposable
     public async Task<JsonDocument> GetMarketAsync(string ticker)
         => await GetAsync($"/markets/{ticker}");
 
+    /// <summary>
+    /// A market from Kalshi's HISTORICAL archive, same shape as <see cref="GetMarketAsync"/>. The live
+    /// <c>/markets/{ticker}</c> answers 404 once a market is about 65 days past settlement (measured
+    /// 2026-11-04, yes/no markets too); the archive still has the full record, result and
+    /// <c>settlement_value_dollars</c> included. <c>GET /historical/cutoff</c> says where the line is.
+    /// </summary>
+    public async Task<JsonDocument> GetHistoricalMarketAsync(string ticker)
+        => await GetAsync($"/historical/markets/{ticker}");
+
     /// <summary>Returns the order book for a single market ticker.</summary>
     public async Task<JsonDocument> GetMarketOrderBookAsync(string ticker)
         => await GetAsync($"/markets/{ticker}/orderbook");

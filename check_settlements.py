@@ -11,8 +11,12 @@ one of 10,224 records; Kalshi does not populate it.
 
 Walkovers ARE distinguishable: "if the match does not occur (signaled by a ball being played) ... the market
 will resolve to a fair price" - those come back with result=scalar rather than yes/no. Measured 2026-09-12:
-45 such markets, none with a fill or a signal, and the report treats them as pending forever because its
-IsFinal accepts only yes/no.
+45 such markets, none with a fill or a signal. The report treated them as pending (its IsFinal accepts only
+yes/no) until 2026-11-04; it now counts them as walkovers - finished, never graded - and the settlement
+store keeps their price (`settlement_value`).
+
+Kalshi's live /markets/{ticker} answers 404 about 65 days after a market settles; /historical/markets/{ticker}
+keeps it, so the API lookup below falls back to the archive.
 
 WHAT IT READS
 -------------
@@ -55,10 +59,11 @@ USAGE
   python check_settlements.py --losses --no-api           skip the one Kalshi GET per ticker
 """
 from __future__ import annotations
-import argparse, csv, glob, io, json, math, os, sys, urllib.request, datetime as dt
+import argparse, csv, glob, io, json, math, os, sys, urllib.error, urllib.request, datetime as dt
 from collections import defaultdict
 
 KALSHI = "https://api.elections.kalshi.com/trade-api/v2/markets/"
+KALSHI_ARCHIVE = "https://api.elections.kalshi.com/trade-api/v2/historical/markets/"
 
 
 def num(v):
@@ -149,11 +154,16 @@ def load_paths(want):
 
 
 def kalshi_market(ticker):
-    try:
-        with urllib.request.urlopen(KALSHI + ticker, timeout=15) as resp:
-            return json.load(resp).get("market") or {}
-    except Exception as e:
-        return {"_error": f"{type(e).__name__}: {e}"}
+    for base in (KALSHI, KALSHI_ARCHIVE):           # a live 404 on an old market is a question for the archive
+        try:
+            with urllib.request.urlopen(base + ticker, timeout=15) as resp:
+                return json.load(resp).get("market") or {}
+        except urllib.error.HTTPError as e:
+            if e.code == 404 and base == KALSHI:
+                continue
+            return {"_error": f"{type(e).__name__}: {e}"}
+        except Exception as e:
+            return {"_error": f"{type(e).__name__}: {e}"}
 
 
 # ── the analysis for one ticker ────────────────────────────────────────────────────────────────
