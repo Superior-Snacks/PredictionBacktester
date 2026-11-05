@@ -110,13 +110,21 @@ public sealed class LiveExecutor
     // ── THE VENUE HOLD ────────────────────────────────────────────────────────────────────────────
     // 2026-09-17: 66 orders in a row failed between 07:02 and 08:54, one per signal, each answered in
     // ~120ms — Kalshi's weekly maintenance (Thursdays 03:00-05:00 ET). The bot had no notion of "the
-    // exchange is closed", so it knocked 66 times and booked each knock as its own error. Now: after
-    // any 5xx, or three consecutive failures, ask /exchange/status once. Not trading -> hold orders
-    // until the venue's own resume estimate (else 60s, doubling to 10 min while it keeps failing).
-    // Trading, but orders still failing -> the same backoff, because a gateway that is refusing us
-    // is not improved by asking faster. Screening and telemetry continue throughout; held signals are
-    // COUNTED, not logged as attempts - they were never sent. The first success clears everything.
-    public long HeldByVenue, VenueHolds;
+    // exchange is closed", so it knocked 66 times and booked each knock as its own error. Now VenueHold
+    // decides: Kalshi closed -> no orders, its status read every 30s, resume the moment it reopens (since
+    // 2026-11-05; before that a backoff grown to 10 minutes noticed a 10:00 reopen at 10:17). Orders
+    // failing on an OPEN exchange -> 60s doubling to 10 min, because a gateway that is refusing us is not
+    // improved by asking faster. Screening and telemetry continue throughout; held signals are COUNTED,
+    // not logged as attempts - they were never sent, and they are never queued.
+    private readonly VenueHold _hold;
+    public long HeldByVenue => _hold.Held;
+    public long VenueHolds => _hold.Holds;
+    /// <summary>Kalshi has said trading is off and has not yet said it is back.</summary>
+    public bool VenueClosed => _hold.Closed;
+    /// <summary>The background tick: one status read while Kalshi is closed, nothing otherwise. Never throws.</summary>
+    public Task PollVenueAsync() => _hold.PollAsync();
+    /// <summary>At shutdown: a closure still open is recorded up to now, so --resolve sets its rows aside.</summary>
+    public void CloseOpenClosure() => _hold.CloseOpen();
     // ── LOCATION ATTESTATION ────────────────────────────────────────────────────────────────────────
     // 2026-09-24 17:32 UTC the account's 7-day location attestation lapsed and every order for two days came
     // back 403 while screening, telemetry and market data all looked healthy. Renewal is a person opening the
@@ -129,11 +137,6 @@ public sealed class LiveExecutor
     private bool _attestLapsedNoted;
     private readonly HashSet<string> _attestWarned = new();
     public DateTime? AttestationExpiry => _attestExpiry;
-    private DateTime _venueHoldUntil = DateTime.MinValue;
-    private string _venueHoldWhy = "";
-    private int _consecutiveErrors;
-    private double _holdSec = 60;
-    private long _heldAtLastNote;
     /// <summary>Where swallowed exceptions go with the venue's full answer (see <see cref="ErrorLog"/>).</summary>
     public ErrorLog? Errors { get; set; }
     /// <summary>Per-level fill detail, written off the order path (see <see cref="FillLadderLog"/>).</summary>
@@ -151,6 +154,7 @@ public sealed class LiveExecutor
         _log = log;
         _cfg = cfg;
         _store = store;
+        _hold = new VenueHold(() => _kalshi.GetExchangeStatusAsync()) { Notify = m => Notify?.Invoke(m) };
         // RECONCILE THE FEE AGAINST THE VENUE ON EVERY FILL. The multiplier is read live, but the 0.07
         // rate, the quadratic shape and the centicent rounding are hardcoded from a dated schedule and no
         // API field exposes them. This is the only thing that would notice if any of them changed.
@@ -270,11 +274,7 @@ public sealed class LiveExecutor
             Interlocked.Increment(ref Skipped);
             return false;
         }
-        if (DateTime.UtcNow < _venueHoldUntil)
-        {
-            Interlocked.Increment(ref HeldByVenue);                  // counted, not attempted
-            return false;
-        }
+        if (await _hold.GateAsync()) return false;                   // counted (HeldByVenue), not attempted
         // KNOWN-LAPSED ATTESTATION: do not send an order Kalshi is certain to refuse. Re-read the expiry at
         // most every 5 minutes (one cheap GET, only while lapsed), and resume the moment it moves forward.
         if (_attestExpiry is { } ax && ax <= DateTime.UtcNow)
@@ -408,7 +408,7 @@ public sealed class LiveExecutor
             _log.Write(new EvLiveRow(t0, ticker, eventId, side, limitCents / 100.0, restAsk, pTrue, ev,
                                      count, orderId, got ? "filled" : (status.Length > 0 ? status : "no-fill"),
                                      (double)fillCount, (double)avgFill, ms, feeReal, feeModel, ctx, (double)venueFee));
-            VenueAccepted();
+            _hold.OnAccepted();
             // OFF THE ORDER PATH, DELIBERATELY. The IOC has already resolved and its row is on disk; this
             // adds a REST read that must never sit between a signal and its order. Detached, guarded, and
             // delayed a beat because Kalshi registers the fill records a moment after it answers the POST.
@@ -454,7 +454,7 @@ public sealed class LiveExecutor
             }
             Con.Line(ConsoleColor.Red,
                 $"[ERR ] {ticker} {side}: order FAILED ({ex.GetType().Name}: {ex.Message}) — screening continues.");
-            await ConsiderVenueHoldAsync(ex, tag);
+            await _hold.OnFailureAsync(ex, tag, t0);
             return false;
         }
         finally
@@ -524,56 +524,9 @@ public sealed class LiveExecutor
     private static string Fmt(TimeSpan t)
         => t <= TimeSpan.Zero ? "0h" : t.TotalHours >= 24 ? $"{(int)t.TotalDays}d{t.Hours:0}h" : $"{(int)t.TotalHours}h{t.Minutes:00}m";
 
-    /// <summary>An order the venue accepted (filled or not): the venue is open, so any hold state ends.</summary>
-    private void VenueAccepted()
-    {
-        _consecutiveErrors = 0;
-        _holdSec = 60;
-        if (_venueHoldWhy.Length > 0)
-        {
-            long held = HeldByVenue - _heldAtLastNote;
-            _heldAtLastNote = HeldByVenue;
-            Con.Line(ConsoleColor.Green, $"[HOLD ] venue accepting orders again ({held} signal(s) were held during the hold).");
-            try { Notify?.Invoke($"✅ Kalshi accepting orders again ({held} signal(s) held meanwhile)."); } catch { }
-            _venueHoldWhy = "";
-        }
-    }
-
-    private async Task ConsiderVenueHoldAsync(Exception ex, string tag)
-    {
-        _consecutiveErrors++;
-        bool serverSide = ex is HttpRequestException h && h.StatusCode is { } sc && (int)sc >= 500;
-        if (!serverSide && _consecutiveErrors < 3) return;          // one 4xx is a datum, not a closure
-
-        bool tradingActive = true; DateTime? resume = null; string said;
-        try
-        {
-            var st = await _kalshi.GetExchangeStatusAsync();
-            tradingActive = st.TradingActive && st.ExchangeActive;
-            resume = st.Resume;
-            said = tradingActive ? "exchange reports trading ACTIVE - orders are failing anyway"
-                                 : "exchange reports trading NOT active"
-                                   + (resume is { } r0 ? $", est. resume {r0:HH:mm}Z" : "");
-        }
-        catch (Exception sx) { said = $"status check failed ({sx.GetType().Name})"; }
-
-        double sec = !tradingActive && resume is { } r && r > DateTime.UtcNow
-                   ? Math.Clamp((r - DateTime.UtcNow).TotalSeconds + 15, 60, 3600)
-                   : _holdSec;
-        _venueHoldUntil = DateTime.UtcNow.AddSeconds(sec);
-        bool first = _venueHoldWhy.Length == 0;
-        _venueHoldWhy = tag;
-        _holdSec = Math.Min(_holdSec * 2, 600);
-        Interlocked.Increment(ref VenueHolds);
-        string line = $"[HOLD ] {_consecutiveErrors} consecutive order failure(s) ({tag}); {said}. "
-                    + $"Holding orders for {sec / 60:0.0} min (until {_venueHoldUntil:HH:mm:ss}Z); screening continues.";
-        Con.Line(ConsoleColor.Yellow, line);
-        if (first)
-            try { Notify?.Invoke($"⏸️ Kalshi not taking orders ({tag}); {said}. Holding orders {sec / 60:0.0} min, then one retry."); } catch { }
-    }
-
     public string Summary() =>
         $"live: attempted {Attempted} filled {Filled} no-fill {NoFill} err {Rejected} skipped {Skipped} "
+      + (VenueClosed ? "KALSHI CLOSED " : "")
       + (HeldByVenue > 0 ? $"held-by-venue {HeldByVenue} " : "")
       + (HeldByAttestation > 0 ? $"held-by-attestation {HeldByAttestation} " : "")
       + (_attestExpiry is { } ae ? (ae <= DateTime.UtcNow ? "ATTESTATION LAPSED " : $"attest {Fmt(ae - DateTime.UtcNow)} ") : "")

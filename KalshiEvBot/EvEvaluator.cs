@@ -315,6 +315,9 @@ public sealed class EvStats
                 IncompleteBook, ScreeningOnly, Implausible, PreMatch, KalshiLed, PinnacleLed,
                 VenueVanished, VenueRefused, OutOfBand, NotRising, NoKineticHistory, DeVigSplit,
                 SourceGap,
+                // Candidates on a market Kalshi itself reports as not trading (paused, closed, settled...): logged
+                // as MARKET_NOT_ACTIVE and never sent, so one shut market cannot trip the venue-wide hold.
+                MarketNotActive,
                 // Signals that WOULD have been bought but were held back for being a derivative.
                 // Counted separately from every other rejection because it is not a rejection: the
                 // row is a good signal by every test the bot has, and this number is the size of
@@ -775,6 +778,7 @@ public sealed class EvEvaluator
         foreach (var c in candidates) _armedEv[$"{ticker}|{c.Side}"] = (now + _cfg.CooldownMs, c.EvWs);
 
         decimal restYes, restNo;
+        string mktStatus = "";
         await _restGate.WaitAsync(ct);
         try
         {
@@ -787,6 +791,11 @@ public sealed class EvEvaluator
                 _kalshi.NoteExchangeIndex(ticker, xi.GetInt32());
             restYes = AskDollars(mkt, yes: true);
             restNo  = AskDollars(mkt, yes: false);
+            // THE MARKET'S OWN STATE, from the same reply. It was never read: a market Kalshi had paused still
+            // priced, still signalled, and every order on it came back refused - three of those in a row put
+            // EVERY market on hold. Now it is logged MARKET_NOT_ACTIVE and never sent (see MarketTradeable).
+            if (mkt.TryGetProperty("status", out var stEl) && stEl.ValueKind == JsonValueKind.String)
+                mktStatus = stEl.GetString() ?? "";
         }
         catch (Exception ex)
         {
@@ -796,6 +805,14 @@ public sealed class EvEvaluator
             return;
         }
         finally { _restGate.Release(); }
+
+        // Said once per change, not per row: a paused market re-signals every 15s for as long as it stays paused.
+        string wasStatus = _marketStatus.GetValueOrDefault(ticker, "active");
+        _marketStatus[ticker] = mktStatus;
+        if (mktStatus != wasStatus && (!MarketTradeable(mktStatus) || !MarketTradeable(wasStatus)))
+            Con.Line(ConsoleColor.DarkYellow, MarketTradeable(mktStatus)
+                ? $"[MKT  ] {ticker} is '{mktStatus}' again at Kalshi - tradeable."
+                : $"[MKT  ] {ticker} is '{mktStatus}' at Kalshi - its candidates are logged MARKET_NOT_ACTIVE and never sent.");
 
         foreach (var c in candidates)
         {
@@ -822,9 +839,17 @@ public sealed class EvEvaluator
                 }
                 else if (verify == "failed") { Interlocked.Increment(ref Stats.VenueRefused); }
             }
-            await Record(pair, screened, restAsk, verify, ct);
+            await Record(pair, screened, restAsk, verify, ct, mktStatus);
         }
     }
+
+    /// <summary>Kalshi market states that take no orders. A BLOCKLIST, not "== active": a renamed or new status
+    /// must not silently stop every trade. The order is still the final word, and Kalshi refuses it on a market
+    /// that is not open, so letting an unknown label through costs at most one refused order.</summary>
+    private static readonly HashSet<string> ShutStatuses = new(StringComparer.OrdinalIgnoreCase)
+        { "initialized", "unopened", "inactive", "paused", "closed", "determined", "disputed", "amended", "finalized", "settled" };
+    internal static bool MarketTradeable(string status) => !ShutStatuses.Contains(status ?? "");
+    private readonly ConcurrentDictionary<string, string> _marketStatus = new(StringComparer.Ordinal);
 
     /// <summary>The free half: Pinnacle fair value against the WS book. Returns null (and counts why) for
     /// anything not worth a REST call.</summary>
@@ -925,7 +950,7 @@ public sealed class EvEvaluator
     // run ahead of its own IOC is how one market gets bought twice. In M0 (_live == null) nothing
     // awaits anything and this is a synchronous method wearing a Task.
     private async Task Record(EvPair pair, Screened c, decimal restAsk, string venueVerify,
-                              CancellationToken ct)
+                              CancellationToken ct, string marketStatus = "")
     {
         double px   = (double)restAsk;
         double feeM = FeeM(pair.KalshiTicker);          // Kalshi's per-series multiplier, read at startup
@@ -1082,9 +1107,12 @@ public sealed class EvEvaluator
         // favourite-longshot bias concentrates there. Leaving them labelled SIGNAL contaminated both the
         // trade set and every conclusion drawn from it.
         bool outOfBand  = !inWin;
+        // Kalshi says this market is not trading (paused, closed, settled): nothing to buy, whatever the edge.
+        bool marketShut = !MarketTradeable(marketStatus);
         bool signal     = clears && !unverified && !implausible && !prematch && !kalshiLed && !venueBad
-                       && !outOfBand && !notRising && !devigSplit && !sourceGap
+                       && !outOfBand && !notRising && !devigSplit && !sourceGap && !marketShut
                        && (!_cfg.RequirePinnacleLed || pinnacleLed);
+        if (marketShut && clears) Interlocked.Increment(ref Stats.MarketNotActive);
         if (unverified && clears) Interlocked.Increment(ref Stats.ScreeningOnly);
         if (prematch && clears)   Interlocked.Increment(ref Stats.PreMatch);
         if (outOfBand && clears)  Interlocked.Increment(ref Stats.OutOfBand);
@@ -1104,6 +1132,7 @@ public sealed class EvEvaluator
         // means watching what it threw away, and line movement answers that within a minute where settlement
         // takes days — so the suppressed rows are exactly the ones worth following.
         string decision = signal ? "SIGNAL"
+                        : marketShut ? "MARKET_NOT_ACTIVE"
                         : venueBad ? "VENUE_REFUSED" : implausible ? "IMPLAUSIBLE"
                         : kalshiLed ? "KALSHI_LED" : prematch ? "SIGNAL_PREMATCH"
                         : outOfBand ? "OUT_OF_BAND"
@@ -1284,6 +1313,7 @@ public sealed class EvEvaluator
             fee, cost, evProp, evShin, ev, c.EvWs, limit,
             size, BankrollUsd, EvMath.OrderFee(px, size.Contracts, feeM), size.Contracts * px,
             inWin, signal ? "SIGNAL" : !clears ? "REJECTED_REST"
+                          : marketShut ? "MARKET_NOT_ACTIVE"
                           : implausible ? "IMPLAUSIBLE"
                           : venueBad ? "VENUE_REFUSED"
                           : kalshiLed ? "KALSHI_LED"
@@ -1315,7 +1345,8 @@ public sealed class EvEvaluator
               + $"size={size.Contracts}/{(depthUnknown ? "?" : $"{depthToLimit:0}")} avail ({(depthUnknown ? "ws book does not reach the limit — REST says it is there" : $"${capacityUsd:0}")})  {regime}  vig={c.Vig:0.0000}{(c.NumLegs > 2 ? $"  [{c.NumLegs}-way]" : "")}{(inWin ? "" : "  [outside price window]")}"
               + liveNote
               + $"{(size.FlooredToZero ? "  [floored to 0 contracts]" : "")}"
-              + $"{(signal ? "" : implausible ? $"  [IMPLAUSIBLE: we say {c.PTrueUsed:0.000}, Kalshi says {px:0.000} — "
+              + $"{(signal ? "" : marketShut ? $"  [MARKET '{marketStatus}' at Kalshi: not trading, never sent]"
+                                   : implausible ? $"  [IMPLAUSIBLE: we say {c.PTrueUsed:0.000}, Kalshi says {px:0.000} — "
                                      + $"a {disagree * 100:0}pt gap is a pairing fault, not an edge]"
                                    : kalshiLed ? $"  [KALSHI LED: it moved {moveK * 100:0.0}c since the last "
                                                  + $"look, our oracle {moveP * 100:0.0}c — we are FOLLOWING, not ahead]"

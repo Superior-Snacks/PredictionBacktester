@@ -163,9 +163,10 @@ public static class ReportCache
         var all = new List<FollowRow>();
         foreach (string f in Directory.GetFiles(dir, prefix + "_*.csv").OrderBy(f => f))
             all.AddRange(LoadFollowFile(f));
-        // Load-time policy, not cache content: a signal the venue could not fill has no convergence to grade.
+        // Load-time policy, not cache content: a signal the venue could not fill has no convergence to grade -
+        // inside the scheduled window, or inside an unplanned closure the live bot recorded.
         int before = all.Count;
-        all.RemoveAll(r => Calibration.InKalshiMaintenance(r.EntryAt));
+        all.RemoveAll(r => Calibration.InKalshiMaintenance(r.EntryAt) || Calibration.InRecordedClosure(r.EntryAt));
         FollowMaintenanceDropped += before - all.Count;
         // --sport: one sport's follow-ups only (the cache stays whole; this is a load-time view of it)
         if (Calibration.SportFilter is not null) all.RemoveAll(r => !Calibration.InScope(r.Ticker));

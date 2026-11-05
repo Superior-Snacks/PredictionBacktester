@@ -30,6 +30,9 @@ public static class SelfTest
     public static int Run()
     {
         Console.WriteLine("KalshiEvBot self-test — pure arithmetic, no venue.\n");
+        // The report's recorded-closure rule reads ev_venue_closures.jsonl from the working directory; no test may
+        // depend on what the live bot happens to have written there.
+        Calibration.Closures = Array.Empty<(DateTime Start, DateTime End)>();
 
         // ── De-vig ────────────────────────────────────────────────────────────────────────────────────
         Console.WriteLine("De-vig");
@@ -356,6 +359,165 @@ public static class SelfTest
                       "append-only: 3 seeded + G + L + X", $"{File.ReadAllLines(path).Length} line(s)");
             }
             finally { Console.SetOut(save); try { Directory.Delete(dir, true); } catch { } }
+        }
+
+        // ── Venue hold: Kalshi closed, its status, the closure log ───────────────────────────────────────
+        Console.WriteLine("\nVenue hold (2026-11-05: Kalshi reopened at 10:00:00, the bot noticed at 10:17)");
+        {
+            Check(Calibration.KalshiMaintenanceEndUtc(new DateTime(2026, 11, 5, 8, 30, 0, DateTimeKind.Utc))
+                  == new DateTime(2026, 11, 5, 10, 0, 0, DateTimeKind.Utc),
+                  "11-05 08:30Z is inside the window, which ends 10:00Z (US standard time)");
+            Check(Calibration.KalshiMaintenanceEndUtc(new DateTime(2026, 10, 29, 7, 30, 0, DateTimeKind.Utc))
+                  == new DateTime(2026, 10, 29, 9, 0, 0, DateTimeKind.Utc),
+                  "10-29 07:30Z is inside, ends 09:00Z (US daylight time)");
+            Check(Calibration.KalshiMaintenanceEndUtc(new DateTime(2026, 11, 5, 10, 0, 0, DateTimeKind.Utc)) is null
+                  && Calibration.KalshiMaintenanceEndUtc(new DateTime(2026, 11, 4, 8, 30, 0, DateTimeKind.Utc)) is null,
+                  "10:00Z on 11-05, or a Wednesday: outside");
+
+            var t0 = new DateTime(2026, 11, 5, 8, 50, 16, DateTimeKind.Utc);       // a Thursday, inside 03:00-05:00 ET
+            var t = t0;
+            bool open = false, down = false;
+            int asks = 0;
+            var notes = new List<string>();
+            string dir = Path.Combine(Path.GetTempPath(), "kalshievbot_hold_" + Guid.NewGuid().ToString("N"));
+            var save = Console.Out;
+            try
+            {
+                Directory.CreateDirectory(dir);
+                string path = Path.Combine(dir, VenueHold.FileName);
+                var vh = new VenueHold(() =>
+                {
+                    asks++;
+                    return down ? Task.FromException<(bool, bool, DateTime?)>(new HttpRequestException("status unreachable"))
+                                : Task.FromResult((open, open, (DateTime?)null));
+                }, () => t, pollSec: 30) { Notify = notes.Add, ClosuresPath = path };
+                static HttpRequestException Refused(string code, System.Net.HttpStatusCode sc)
+                    => new($"Kalshi POST /portfolio/events/orders {(int)sc}: {{\"error\":{{\"code\":\"{code}\"}}}}", null, sc);
+                var paused = Refused("exchange_is_paused", System.Net.HttpStatusCode.Conflict);
+                bool Gate() => vh.GateAsync().GetAwaiter().GetResult();
+                void Fail(HttpRequestException e) => vh.OnFailureAsync(e, ErrorLog.Tag(e), t).GetAwaiter().GetResult();
+
+                Console.SetOut(TextWriter.Null);                 // the hold's own console lines are not the test
+                bool before = Gate();
+                Fail(paused);
+                bool closedNow = vh.Closed;
+                int asksAtHold = asks;
+                bool held1 = Gate();                             // the next poll is not due yet
+                int asksHeld1 = asks;
+                t = t0.AddSeconds(31);
+                bool held2 = Gate();                             // due: asks again, still closed
+                int asksHeld2 = asks;
+                t = t0.AddMinutes(20);                           // twenty quiet minutes, no tick
+                bool held3 = Gate();
+                Console.SetOut(save);
+
+                Check(!before, "nothing failed yet -> no hold");
+                Check(closedNow && asksAtHold == 1,
+                      "ONE 'exchange_is_paused' refusal asks Kalshi's status and holds (it took three)",
+                      $"closed={closedNow} asks={asksAtHold}");
+                Check(notes.Count == 1 && notes[0].Contains("weekly maintenance") && notes[0].Contains("~10:00 UTC"),
+                      "inside the window the alert names the maintenance and when it ends (10:00 UTC since US clocks went back)",
+                      notes.Count > 0 ? notes[0] : "(none)");
+                Check(held1 && asksHeld1 == 1, "a signal before the next poll is due is held without asking again", $"asks {asksHeld1}");
+                Check(held2 && asksHeld2 == 2, "a due poll asks again; still closed -> held", $"asks {asksHeld2}");
+                Check(held3, "while the status answers, a closed hold never lapses into a test order");
+
+                Console.SetOut(TextWriter.Null);
+                open = true;
+                t = t0.AddMinutes(20).AddSeconds(31);
+                vh.PollAsync().GetAwaiter().GetResult();         // the background tick finds it open, before any signal
+                bool afterOpen = Gate();
+                Console.SetOut(save);
+                Check(!vh.Closed && !afterOpen, "the poll that sees trading ON ends the hold at once");
+                Check(notes.Count == 2 && notes[1].StartsWith("✅") && notes[1].Contains("3 signal(s) skipped")
+                      && notes[1].Contains("not queued"),
+                      "the release says Kalshi is back and that the skipped signals were dropped", notes.Count > 1 ? notes[1] : "(none)");
+                var rec = VenueHold.Load(path);
+                Check(rec.Count == 1 && rec[0].Start == t0 && rec[0].End == t,
+                      "the closure is recorded from the first refusal to the reopen",
+                      rec.Count > 0 ? $"{rec[0].Start:o} .. {rec[0].End:o}" : "(none)");
+                Check(VenueHold.Contains(rec, t0.AddMinutes(10)) && !VenueHold.Contains(rec, t0.AddSeconds(-1))
+                      && !VenueHold.Contains(rec, t.AddSeconds(1)),
+                      "inside the closure yes; before the first refusal or after the reopen no");
+
+                // an OPEN exchange that keeps refusing: the old backoff, and no closure
+                Console.SetOut(TextWriter.Null);
+                var bad = Refused("internal_error", System.Net.HttpStatusCode.BadRequest);
+                int asks0 = asks;
+                Fail(bad); Fail(bad);
+                bool twoPlain = Gate();
+                int asksTwo = asks;
+                Fail(bad);                                       // the third in a row
+                bool heldFailing = Gate(), closedFailing = vh.Closed;
+                t = t.AddSeconds(61);
+                bool testOrder = !Gate();                        // the backoff is over: one order goes as the test
+                vh.OnAccepted();
+                Console.SetOut(save);
+                Check(!twoPlain && asksTwo == asks0, "two plain 4xx are data: no status read, no hold");
+                Check(heldFailing && !closedFailing && asks == asks0 + 1, "three in a row on an OPEN exchange: held, NOT a closure");
+                Check(testOrder, "...and after the 60s backoff one order goes as the test");
+                Check(notes.Count == 4 && notes[2].Contains("then one test order") && notes[3].Contains("accepting orders again"),
+                      "a failing hold keeps its own alert and release", string.Join(" | ", notes.Skip(2)));
+                Check(VenueHold.Load(path).Count == 1, "a hold on an open exchange is not recorded as a closure");
+
+                // 'paused' from an exchange whose status says trading is ON = one market, not the venue
+                Console.SetOut(TextWriter.Null);
+                Fail(paused);
+                bool oneMarket = Gate(), oneClosed = vh.Closed;
+                vh.OnAccepted();
+                Console.SetOut(save);
+                Check(!oneMarket && !oneClosed && notes.Count == 4,
+                      "'paused' while Kalshi's status says trading is ON is one market: nothing held");
+
+                // an unplanned closure, and stopping in the middle of it
+                Console.SetOut(TextWriter.Null);
+                t = new DateTime(2026, 11, 3, 15, 0, 0, DateTimeKind.Utc);           // a Tuesday afternoon
+                open = false;
+                Fail(paused);
+                bool unplanned = vh.Closed;
+                vh.CloseOpen();
+                Console.SetOut(save);
+                Check(unplanned && notes.Count == 5 && notes[4].Contains("NOT the scheduled maintenance"),
+                      "outside the window the alert says it is not the scheduled maintenance", notes.Count > 4 ? notes[4] : "(none)");
+                Check(!vh.Closed && VenueHold.Load(path).Count == 2, "stopping mid-closure still records it");
+
+                // the status endpoint itself down: the hold lapses into the old one-order test, and the test ends it
+                Console.SetOut(TextWriter.Null);
+                Fail(paused);                                    // closed again
+                down = true;
+                t = t.AddMinutes(5);
+                bool probe = !Gate();
+                bool stillClosed = vh.Closed;
+                vh.OnAccepted();
+                Console.SetOut(save);
+                Check(probe && stillClosed, "status unreadable: the hold lapses into one test order, still marked closed");
+                Check(!vh.Closed && File.ReadAllLines(path).Length == 3 && File.ReadAllLines(path)[2].Contains("an order went through"),
+                      "...and that order going through ends the closure and records it");
+            }
+            finally { Console.SetOut(save); try { Directory.Delete(dir, true); } catch { } }
+
+            // --resolve sets aside signals inside a recorded closure, as it does the scheduled window
+            var tue = new DateTime(2026, 11, 3, 15, 0, 0, DateTimeKind.Utc);
+            Calibration.Closures = new List<(DateTime Start, DateTime End)> { (tue, tue.AddMinutes(30)) };
+            Obs Row(DateTime at, bool sig) => new("KXTEST-CLOSURE", "YES", at, 0.5, 0.5, 0.5, 0.45, 0.47, 0.03, 1,
+                                                  true, 100, sig, null, 1, "STANDING", sig ? "SIGNAL" : "REJECTED_REST",
+                                                  "moneyline", 10, 0);
+            var kept = Calibration.Finalize(new[] { Row(tue.AddMinutes(10), true), Row(tue.AddMinutes(10), false),
+                                                    Row(tue.AddMinutes(40), true) },
+                                            new Dictionary<string, SettlementRecord>());
+            Check(kept.Count == 2 && Calibration.LastClosureDropped == 1 && kept.Count(o => o.IsSignal) == 1,
+                  "--resolve sets aside a SIGNAL inside a recorded closure; the oracle row and later signals stay",
+                  $"kept {kept.Count}, dropped {Calibration.LastClosureDropped}");
+            Calibration.Closures = Array.Empty<(DateTime Start, DateTime End)>();
+
+            // the market's own status, from the price read the evaluator already makes
+            Check(EvEvaluator.MarketTradeable("active") && EvEvaluator.MarketTradeable(""),
+                  "market status 'active', or no status field at all: tradeable");
+            Check(!EvEvaluator.MarketTradeable("inactive") && !EvEvaluator.MarketTradeable("closed")
+                  && !EvEvaluator.MarketTradeable("determined") && !EvEvaluator.MarketTradeable("finalized"),
+                  "paused / closed / determined / finalized: logged MARKET_NOT_ACTIVE, never sent");
+            Check(EvEvaluator.MarketTradeable("open"),
+                  "an UNKNOWN status is let through - a renamed field cannot stop every trade; the order is the final word");
         }
 
         // ── Rolling CSV ───────────────────────────────────────────────────────────────────────────────

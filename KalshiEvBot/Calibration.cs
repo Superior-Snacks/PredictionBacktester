@@ -96,6 +96,9 @@ public static class Calibration
     /// in two hours, every one "fillable" on the WS book, none buyable. Non-signal rows are kept - they
     /// grade the oracle, which the gateway does not touch.</summary>
     public static int LastMaintenanceDropped { get; private set; }
+    /// <summary>SIGNAL rows inside a closure the live bot RECORDED (ev_venue_closures.jsonl) outside the scheduled
+    /// window - an unplanned halt. Same reasoning: a frozen book against a moving Pinnacle, never buyable.</summary>
+    public static int LastClosureDropped { get; private set; }
     /// <summary>Signals whose order attempt came back as a VENUE error (order log Status "error:...",
     /// within 10s): a miss that was ours or the venue's, not the book's. Drops the strays the window
     /// does not cover, and whatever the next outage produces.</summary>
@@ -140,7 +143,7 @@ public static class Calibration
     {
         var outp = new List<Obs>();
         var misoriented = MisorientedTickers();
-        int droppedMis = 0, droppedGap = 0, droppedAge = 0, droppedMaint = 0, droppedVenue = 0;
+        int droppedMis = 0, droppedGap = 0, droppedAge = 0, droppedMaint = 0, droppedClosure = 0, droppedVenue = 0;
         // ticker|side -> sorted attempt times that errored at the venue
         var errIdx = new Dictionary<string, List<DateTime>>(StringComparer.Ordinal);
         foreach (var (tk, sd, at) in venueErrors ?? Array.Empty<(string, string, DateTime)>())
@@ -170,6 +173,9 @@ public static class Calibration
             // which Kalshi's gateway has no bearing on, and sections 2-4 want them. Measured 2026-09-20:
             // 88 signal rows on 17 markets inside the window against ~69,000 rows in total.
             if (o.IsSignal && InKalshiMaintenance(o.At)) { droppedMaint++; continue; }
+            // ...and any other closure the live bot recorded. Its HELD signals never reach the order log, so the
+            // venue-error rule below cannot see them: 28 of the 39 on 2026-11-05.
+            if (o.IsSignal && InRecordedClosure(o.At)) { droppedClosure++; continue; }
             // AND THE ORDER THAT ERRORED. Same logic for any signal whose attempt the venue refused outside
             // the window (one on 2026-08-27; whatever the next outage brings).
             if (o.IsSignal && ErroredAtVenue(ticker, side, o.At)) { droppedVenue++; continue; }
@@ -198,6 +204,7 @@ public static class Calibration
         LastSourceGapDropped = droppedGap;
         LastStaleAgeDropped = droppedAge;
         LastMaintenanceDropped = droppedMaint;
+        LastClosureDropped = droppedClosure;
         LastVenueErrorDropped = droppedVenue;
         return outp;
     }
@@ -907,7 +914,7 @@ public static class Calibration
         Console.WriteLine();
         Console.WriteLine("9. CONVERGENCE  (did Kalshi come to OUR price? the thesis guard)");
         if (ReportCache.FollowMaintenanceDropped > 0)
-            Console.WriteLine($"   ({ReportCache.FollowMaintenanceDropped} follow-up row(s) inside Kalshi's maintenance window set aside, as in section 1)");
+            Console.WriteLine($"   ({ReportCache.FollowMaintenanceDropped} follow-up row(s) inside Kalshi's maintenance window or a recorded closure set aside, as in section 1)");
         Console.WriteLine("   one row per ticker+side per checkpoint.  MOVE = NowAsk - EntryAsk: the closing-line value,");
         Console.WriteLine("   in cents, with its error bar. came-to-us = share that rose at all (ties excluded);");
         Console.WriteLine($"   reached = arrived within {tol * 100:0.#}c of entry P_true; BID = NowBid - EntryAsk, could we have sold above cost.");
@@ -1081,10 +1088,13 @@ public static class Calibration
             // the first 76 errors ever logged fell inside it (2026-09-03, 2026-09-17). Rows from before the
             // executor learned to hold say only "HttpRequestException"; the window attributes them.
             int inMaint = errs.Count(r => InKalshiMaintenance(r.At));
-            if (inMaint > 0)
+            int inClosure = errs.Count(r => !InKalshiMaintenance(r.At) && InRecordedClosure(r.At));
+            if (inMaint + inClosure > 0)
                 Console.WriteLine($"                {inMaint} of the {errs.Count} fell inside Kalshi's weekly maintenance window "
-                                + "(Thu 03:00-05:00 ET) - the exchange was closed, not the order path. "
-                                + (errs.Count - inMaint > 0 ? $"{errs.Count - inMaint} outside it are the ones to read." : "None outside it."));
+                                + "(Thu 03:00-05:00 ET)"
+                                + (inClosure > 0 ? $" and {inClosure} inside an unplanned closure the bot recorded" : "")
+                                + " - the exchange was closed, not the order path. "
+                                + (errs.Count - inMaint - inClosure > 0 ? $"{errs.Count - inMaint - inClosure} outside are the ones to read." : "None outside."));
         }
 
         if (got.Count > 0)
@@ -1982,6 +1992,28 @@ public static class Calibration
         return et.DayOfWeek == DayOfWeek.Thursday && et.Hour >= 3 && et.Hour < 5;
     }
 
+    /// <summary>When the maintenance window containing <paramref name="at"/> ends (05:00 ET that Thursday, as UTC),
+    /// or null outside it. 10:00Z in US standard time, 09:00Z in daylight time - the hold's alert says which.</summary>
+    public static DateTime? KalshiMaintenanceEndUtc(DateTime at)
+    {
+        if (!InKalshiMaintenance(at) || _eastern is null) return null;
+        var utc = at.Kind == DateTimeKind.Local ? at.ToUniversalTime() : DateTime.SpecifyKind(at, DateTimeKind.Utc);
+        var et = TimeZoneInfo.ConvertTimeFromUtc(utc, _eastern);
+        return TimeZoneInfo.ConvertTimeToUtc(new DateTime(et.Year, et.Month, et.Day, 5, 0, 0, DateTimeKind.Unspecified), _eastern);
+    }
+
+    /// <summary>Closed periods the live bot recorded in ev_venue_closures.jsonl (see <see cref="VenueHold"/>), read
+    /// once per process. The scheduled window is known by the clock; an unplanned closure only by this file.
+    /// The self-test sets its own list so the real file can never leak into a test.</summary>
+    internal static IReadOnlyList<(DateTime Start, DateTime End)>? Closures;
+
+    public static bool InRecordedClosure(DateTime at) => VenueHold.Contains(Closures ??= VenueHold.Load(), at);
+
+    public static bool InRecordedClosure(string atIso)
+        => DateTime.TryParse(atIso, CultureInfo.InvariantCulture,
+                             DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var utc)
+           && InRecordedClosure(utc);
+
     /// <summary>What a real order pays ABOVE the price it was quoted at, measured on filled orders.
     ///
     /// <para><b>Why this exists.</b> Every EV in this report is priced at the Kalshi REST ask - the top of
@@ -2342,12 +2374,15 @@ public static class Calibration
                             + $"than {MaxInPlayAgeMs:0}ms — an ageing quote is a feed dying, not a slow tick.");
             Console.ResetColor();
         }
-        if (LastMaintenanceDropped > 0 || LastVenueErrorDropped > 0)
+        if (LastMaintenanceDropped > 0 || LastClosureDropped > 0 || LastVenueErrorDropped > 0)
         {
             Console.ForegroundColor = ConsoleColor.DarkYellow;
             if (LastMaintenanceDropped > 0)
                 Console.WriteLine($"   EXCLUDED {LastMaintenanceDropped} signal row(s) inside Kalshi's weekly maintenance window (Thu 03:00-05:00 ET) — "
                                 + "the venue refused every order; a signal there says nothing about the strategy. Non-signal rows stay (oracle calibration).");
+            if (LastClosureDropped > 0)
+                Console.WriteLine($"   EXCLUDED {LastClosureDropped} signal row(s) inside an unplanned Kalshi closure the bot recorded "
+                                + $"({VenueHold.FileName}) — same reasoning: a frozen book, nothing buyable.");
             if (LastVenueErrorDropped > 0)
                 Console.WriteLine($"   EXCLUDED {LastVenueErrorDropped} signal(s) whose order attempt errored at the venue — "
                                 + "a miss that was ours or Kalshi's, not the book's (section 7 still counts the attempts).");

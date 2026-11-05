@@ -668,6 +668,17 @@ internal static class Program
                 }
             });
         }
+        // KALSHI CLOSED: while its status says trading is off, read it every EV_VENUE_POLL_SEC and resume the
+        // moment it is back - without waiting for a signal to arrive (see VenueHold). An idle tick otherwise.
+        foreach (var lxP in new[] { eval.LiveExec, evalD?.LiveExec }.OfType<LiveExecutor>())
+            _ = Task.Run(async () =>
+            {
+                while (!cts.IsCancellationRequested)
+                {
+                    try { await Task.Delay(TimeSpan.FromSeconds(5), cts.Token); } catch (OperationCanceledException) { break; }
+                    try { await lxP.PollVenueAsync(); } catch { }
+                }
+            });
         // THE END-OF-DAY DROP. Fires once, a set delay after the LAST work window closes, and posts the
         // complete report as an attachment so the day can be read (and pasted) away from the machine.
         if (discord.Enabled && EvConfig.Env("EV_REPORT_AFTER_BLOCKS", 1) > 0)
@@ -797,6 +808,9 @@ internal static class Program
         var resourceTask = ResourceMonitor.RunAsync(cts.Token);
         await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask, reloadTask, followTask, statusTask,
                       resourceTask);
+        // Stopped while Kalshi was closed: record the closure up to now, so --resolve still sets its signals aside.
+        eval.LiveExec?.CloseOpenClosure();
+        evalD?.LiveExec?.CloseOpenClosure();
         PrintStatus(eval, feed, oracle, telemetry, snapshots, resolver, pairsPath);
         Console.WriteLine($"[DONE] {telemetry.RowsWritten} row(s) → {telemetry.Path}");
         return 0;
@@ -2017,7 +2031,7 @@ internal static class Program
           + $"| oracle {(o.IsConnected ? "up" : "DOWN")} quotes {o.QuoteCount} stale {o.StaleCount} "
           + $"{(o.SessionReady ? "" : "SESSION-DOWN ")}"
           + $"| screened {s.Screened} (noquote {s.NoQuote} stale {s.StaleOracle} susp {s.Suspended} "
-          + $"below {s.BelowPrescreen} cooldown {s.Cooldown} (hid {s.CooldownSignals} signal(s)) incomplete-book {s.IncompleteBook} unverified {s.ScreeningOnly} implausible {s.Implausible} prematch {s.PreMatch} out-of-band {s.OutOfBand} devig-split {s.DeVigSplit} source-gap {s.SourceGap} not-rising {s.NotRising} no-kinetic-hist {s.NoKineticHistory} kalshi-led {s.KalshiLed} pinnacle-led {s.PinnacleLed} venue-vanished {s.VenueVanished} venue-refused {s.VenueRefused}) "
+          + $"below {s.BelowPrescreen} cooldown {s.Cooldown} (hid {s.CooldownSignals} signal(s)) incomplete-book {s.IncompleteBook} unverified {s.ScreeningOnly} implausible {s.Implausible} prematch {s.PreMatch} out-of-band {s.OutOfBand} devig-split {s.DeVigSplit} source-gap {s.SourceGap} not-rising {s.NotRising} no-kinetic-hist {s.NoKineticHistory} kalshi-led {s.KalshiLed} pinnacle-led {s.PinnacleLed} venue-vanished {s.VenueVanished} venue-refused {s.VenueRefused} mkt-not-active {s.MarketNotActive}) "
           + $"| rest {s.RestCalls} fail {s.RestFailed} 429 {s.RateLimited} "
           + $"| SIGNALS {s.Signals} rejected-at-rest {s.RejectedByRest} floored {s.FlooredToZero} "
           + $"| rows {t.RowsWritten} | bankroll ${e.BankrollUsd:0.00}");
