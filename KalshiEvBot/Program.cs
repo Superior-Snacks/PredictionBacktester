@@ -1558,8 +1558,9 @@ internal static class Program
                 //
                 // What actually ends a day is the OVERNIGHT GAP. So a window is day-final when nothing
                 // follows it, or when the next one opens more than EV_REPORT_DAY_GAP_H later. On the
-                // measured plan the within-day gaps were 0.9-1.6h and the overnight gap 11.7h, so the
-                // default of 4h separates them with room on both sides.
+                // measured plan the within-day gaps were 0.9-1.6h and the overnight gap 11.7h. Since
+                // 2026-11-09 the plan runs 06:00-02:00 and the overnight gap is only ~4.1-4.5h (01:45 close,
+                // 06:15 open, +/-7 min jitter), so the default is 3h: it still clears the within-day gaps.
                 var closes = new List<(DateTime Open, DateTime Close)>();
                 foreach (var w in wins.EnumerateArray())
                 {
@@ -1574,7 +1575,7 @@ internal static class Program
                 if (closes.Count == 0) continue;
                 closes.Sort((a, b) => a.Open.CompareTo(b.Open));
 
-                double gapH = EvConfig.Env("EV_REPORT_DAY_GAP_H", 4);
+                double gapH = EvConfig.Env("EV_REPORT_DAY_GAP_H", 3);
                 for (int i = 0; i < closes.Count; i++)
                 {
                     bool dayFinal = i == closes.Count - 1
@@ -1592,12 +1593,20 @@ internal static class Program
                 var now    = DateTime.UtcNow;
                 if (now < fireAt) continue;                                  // still inside the grace period
                 if ((now - fireAt).TotalMinutes > maxLateMin) continue;      // far too late to be this day's
-                string day = lastClose.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-                if (LastSent() == day) continue;                             // already dropped
+                // The day a session BELONGS to, not the date it closed on: the last block now closes ~01:45,
+                // which carried tomorrow's date into the label and the marker. Same 04:00 rollover as the
+                // counts line in ev_report_discord.py, so one post per working day either way.
+                string day = lastClose.AddHours(-4).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                // The marker gained a "day:" prefix with that change. A marker from the older code holds the
+                // CLOSE date bare, and that day would equal the next night's working day: compared as-is, the
+                // first night after the switch would be skipped as "already dropped".
+                string mark = "day:" + day, sent = LastSent();
+                if (sent == mark || sent == lastClose.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))
+                    continue;                                                // already dropped
 
                 // WRITE THE MARKER FIRST. The report takes minutes; if it crashed halfway through we would
                 // rather skip a day than post the attachment twice on the next pass.
-                try { File.WriteAllText(marker, day); } catch { }
+                try { File.WriteAllText(marker, mark); } catch { }
                 Console.WriteLine($"[REPORT] final block closed {lastClose:HH:mm}Z — posting the full report.");
                 await runReport($"--full --label \"final block {day}\"");
             }

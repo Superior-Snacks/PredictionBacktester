@@ -192,12 +192,19 @@ def reminders_due(root: str, today: "dt.date | None" = None) -> list:
     return out
 
 
-def fills_line(root: str) -> str:
+# A DAY'S COUNTS RUN 04:00 TO 04:00 UTC. Since 2026-11-09 the last session runs past midnight (20:45-01:45) and
+# the end-of-day drop fires ~02:15, so a calendar "today" counted only the fills since midnight. Any rollover
+# between the night's last close (02:00) and the morning's first open (06:00) gives each session its own day.
+DAY_ROLLOVER_H = 4
+
+
+def fills_line(root: str, now: "dt.datetime | None" = None) -> str:
     """'live fills: N total · today M filled of K attempts'. Counts, not money: the operator reads this
     channel every two days on purpose, and a daily P&L number is exactly what they asked to keep out of it."""
     import csv, glob
     total = 0; today_f = 0; today_a = 0
-    today = dt.date.today()
+    shift = dt.timedelta(hours=DAY_ROLLOVER_H)
+    today = ((now or dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)) - shift).date()
     for f in glob.glob(os.path.join(root, "EvLive_*.csv")):
         try:
             for r in csv.DictReader(io.open(f, encoding="utf-8", errors="replace")):
@@ -205,9 +212,8 @@ def fills_line(root: str) -> str:
                     fc = float(r.get("FillCount") or 0)
                 except ValueError:
                     fc = 0.0
-                at = (r.get("At") or "")[:10]
                 try:
-                    d = dt.date.fromisoformat(at)
+                    d = (dt.datetime.fromisoformat((r.get("At") or "")[:19]) - shift).date()
                 except ValueError:
                     d = None
                 if fc >= 1:
