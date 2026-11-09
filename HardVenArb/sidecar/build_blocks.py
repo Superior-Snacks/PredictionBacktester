@@ -40,12 +40,15 @@ import schedule as sched                                   # noqa: E402  (path s
 
 
 class Block(NamedTuple):
-    open_min: int          # minutes from local midnight
+    open_min: int          # minutes from the plan's local midnight (past 1440 = after midnight, see __str__)
     close_min: int
 
     def __str__(self) -> str:
-        return (f"{self.open_min // 60:02d}:{self.open_min % 60:02d}-"
-                f"{self.close_min // 60:02d}:{self.close_min % 60:02d}")
+        # A plan may run past midnight (PINNACLE_AUTOBLOCK_LATEST before EARLIEST, 2026-11-09), so a close can be
+        # minute 1545. Printed as the CLOCK time (01:45): the lifecycle reads an end at or before its start as
+        # "crosses midnight", which is exactly what 20:45-01:45 means.
+        return (f"{self.open_min // 60 % 24:02d}:{self.open_min % 60:02d}-"
+                f"{self.close_min // 60 % 24:02d}:{self.close_min % 60:02d}")
 
 
 def hm(s: str) -> int:
@@ -54,16 +57,28 @@ def hm(s: str) -> int:
 
 
 # -- slate ------------------------------------------------------------------------------------------------
-def load_starts(sport_ids, horizon_h, pairs_path, paired_only, back_hours=0):
+def local_naive(t_utc):
+    """A naive-UTC board time as naive LOCAL time, the clock every plan is written in."""
+    return sched._local(t_utc).replace(tzinfo=None)
+
+
+def load_starts(sport_ids, horizon_h, pairs_path, paired_only, back_hours=0, window=None):
     """Today's game starts, optionally restricted to games we can actually bet.
 
     back_hours=0 for the STARTS objective: a match that has already started cannot be covered by a window we
     are about to author, so counting it would inflate every candidate equally while changing no decision.
     The IN-PLAY objective passes a few hours: a match LISTED at 10:00 is often still to be played at noon
     ("followed by"), and the board keeps listing it until it goes live.
+
+    `window` = (lo, hi) naive LOCAL datetimes replaces the calendar-day filter: a plan that runs past midnight
+    has to see the matches listed after it, which the local-day filter drops.
     """
     starts = sched.fetch_starts(sport_ids, horizon_hours=horizon_h, back_hours=back_hours)
-    starts = sched.filter_to_local_day(starts)
+    if window is None:
+        starts = sched.filter_to_local_day(starts)
+    else:
+        lo, hi = window
+        starts = [g for g in starts if lo <= local_naive(g[0]) < hi]
     if paired_only:
         mids = sched.paired_mids(pairs_path)
         if mids:
@@ -101,8 +116,51 @@ def _cum_live(curve):
     return out
 
 
-def expected_live(times, blocks, curve, jitter_min=0):
-    """Expected live minutes `blocks` hold for matches LISTED at `times` (minutes from local midnight)."""
+# -- value per clock hour (2026-11-09) --------------------------------------------------------------------------
+# A live minute is not worth the same at every hour. Measured 09-28..11-08 on the bot's own covered tennis: fills
+# per in-play match-hour 0.047 at 07-09 local, 0.056 at 09-13, 0.064 at 13-17, 0.078 at 17-20, 0.155 at 20-23 -
+# the evening (Americas events) pays ~3x the morning per match. Unweighted, the in-play objective spends budget
+# where the most matches are, which is the morning; PINNACLE_BLOCK_WEIGHTS points at hour_value.json (built by
+# hour_value.py from our own fills) and each live minute then counts at its hour's weight.
+WEIGHTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hour_value.json")
+
+
+def load_weights(path=None):
+    """24 per-hour weights (LOCAL clock hour) from hour_value.json, or None - the caller then scores unweighted."""
+    try:
+        with open(path or WEIGHTS_PATH, encoding="utf-8") as fh:
+            w = [float(x) for x in json.load(fh)["weights"]]
+        return w if len(w) == 24 and min(w) >= 0 and max(w) > 0 else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _live_value(times, curve, weights, lo, hi):
+    """Prefix sums of expected live VALUE per minute on [lo, hi): over every listed start, P(live) at that minute
+    times the weight of the clock hour it falls in. A window [a, b) is then worth S[b - lo] - S[a - lo]."""
+    step, p = curve
+    span = len(p) * step
+    dens = [0.0] * max(hi - lo, 0)
+    for t in times:
+        for m in range(max(lo, t), min(hi, t + span)):
+            dens[m - lo] += p[(m - t) // step]
+    out = [0.0]
+    for i, d in enumerate(dens):
+        out.append(out[-1] + d * weights[((lo + i) // 60) % 24])
+    return out
+
+
+def expected_live(times, blocks, curve, jitter_min=0, weights=None):
+    """Expected live minutes `blocks` hold for matches LISTED at `times` (minutes from the plan's local midnight).
+    With `weights`, each minute counts at its clock hour's weight instead of 1."""
+    if weights is not None:
+        spans = [(b.open_min + jitter_min, b.close_min - jitter_min) for b in blocks]
+        spans = [(a, b) for a, b in spans if b > a]
+        if not spans:
+            return 0.0
+        lo, hi = min(a for a, _ in spans), max(b for _, b in spans)
+        s = _live_value(times, curve, weights, lo, hi)
+        return sum(s[b - lo] - s[a - lo] for a, b in spans)
     c = _cum_live(curve)
     top = len(c) - 1
     cm = lambda x: c[0 if x <= 0 else min(x, top)]
@@ -111,12 +169,16 @@ def expected_live(times, blocks, curve, jitter_min=0):
 
 # -- the optimiser ------------------------------------------------------------------------------------------
 def optimise(starts, budget_min, min_gap_min, jitter_min, earliest_min, latest_min, now_min,
-             min_len=60, max_len=300, objective="starts", curve=None):
+             min_len=60, max_len=300, objective="starts", curve=None, weights=None, times=None):
     """Pick non-overlapping windows maximising coverage, subject to a total-minutes budget.
 
     Coverage is covered STARTS by default, or expected LIVE minutes with objective="inplay" and a curve (see
     above; without a curve it silently stays on starts). Everything else - the grid, gaps, jitter, lengths,
     budget and the DP - is shared, so the two objectives differ in what they count and nothing else.
+
+    `weights` (in-play only) values each live minute at its clock hour's weight; without them the scoring is
+    exactly the unweighted one. `times` = listed starts already in minutes from the plan's midnight, which a plan
+    running past midnight needs (it may exceed 1440); without it they are read off the start datetimes.
 
     Weighted interval scheduling with a budget - a DP over candidates sorted by close time, NOT a search over
     combinations: at ~288 candidates the exhaustive form is C(288,4) ~ 283M and does not finish.
@@ -126,7 +188,7 @@ def optimise(starts, budget_min, min_gap_min, jitter_min, earliest_min, latest_m
     windows are non-overlapping and separated by `min_gap_min`, no start - and no live minute - can fall inside
     two of them, so coverage is additive and the DP is exact rather than a heuristic.
     """
-    times = sorted(t.hour * 60 + t.minute for t in (g[0] for g in starts))
+    times = sorted(times) if times is not None else sorted(t.hour * 60 + t.minute for t in (g[0] for g in starts))
     inplay = objective == "inplay" and curve is not None
     if inplay:
         cum = _cum_live(curve)
@@ -137,6 +199,10 @@ def optimise(starts, budget_min, min_gap_min, jitter_min, earliest_min, latest_m
     # test below could never fire and the optimiser silently returned "nothing worth opening" at any wall
     # clock not already on the grid.
     earliest_min = ((earliest_min + 14) // 15) * 15
+    weighted = inplay and weights is not None
+    if weighted:                                           # one prefix pass, then every candidate is O(1)
+        val = _live_value(times, curve, weights, earliest_min, max(latest_min, earliest_min))
+        vat = lambda x: val[min(max(x - earliest_min, 0), len(val) - 1)]
     cands = []                                             # (close, open, minutes, covered)
     for o in range(earliest_min, latest_min, 15):
         if o % 60 not in (15, 45):                         # the round-hour rule; see module docstring
@@ -149,7 +215,7 @@ def optimise(starts, budget_min, min_gap_min, jitter_min, earliest_min, latest_m
                 break
             lo, hi = o + jitter_min, c - jitter_min
             if inplay:
-                n = sum(cm(hi - t) - cm(lo - t) for t in times)
+                n = vat(hi) - vat(lo) if weighted else sum(cm(hi - t) - cm(lo - t) for t in times)
                 if n < 0.5:                                # under half an expected live minute: not a candidate
                     continue
             else:

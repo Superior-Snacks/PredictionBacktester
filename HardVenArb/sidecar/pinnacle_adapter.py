@@ -1009,12 +1009,21 @@ class PinnacleAdapter(BookAdapter):
                 horizon_h=self._lifecycle_horizon,
                 # "starts" (default, the original) | "inplay": score windows by expected LIVE minutes from
                 # sidecar/live_curve.json instead of listed starts - see build_blocks / live_curve.py.
-                objective=os.environ.get("PINNACLE_BLOCK_OBJECTIVE", "starts"))
+                objective=os.environ.get("PINNACLE_BLOCK_OBJECTIVE", "starts"),
+                # in-play only: each live minute at its clock hour's measured value (hour_value.py). Unset = off.
+                weights_path=os.environ.get("PINNACLE_BLOCK_WEIGHTS") or None)
             self._blocks_task = asyncio.create_task(self._blocks.run())
+            _bs = self._blocks.status()
+            try:
+                _m = lambda s: int(s.split(":")[0]) * 60 + int(s.split(":")[1])
+                _overnight = _m(self._autoblock_latest) <= _m(self._autoblock_earliest)
+            except (ValueError, IndexError):
+                _overnight = False
             print(f"[PINNACLE] AUTO-BLOCK on — authoring work windows at startup then daily at "
                   f"{self._autoblock_hours} local, budget {self._autoblock_budget_h:g}h, "
-                  f"window {self._autoblock_earliest}-{self._autoblock_latest}, "
-                  f"objective {self._blocks.status()['objective']}. "
+                  f"window {self._autoblock_earliest}-{self._autoblock_latest}"
+                  f"{' (runs past midnight)' if _overnight else ''}, "
+                  f"objective {_bs['objective']}, weights {_bs['weights'] or 'off'}. "
                   f"Static PINNACLE_PIN_HOURS is only the cold-start fallback now.")
             cadence = (f"every {self._pair_interval_min} min (intraday — pairs live/late-appearing games)"
                        if self._pair_interval_min > 0 else f"daily {self._pair_hour:02d}:00 local")

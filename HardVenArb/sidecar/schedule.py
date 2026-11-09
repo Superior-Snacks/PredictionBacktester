@@ -323,13 +323,18 @@ def pinned_windows(ranges: list[tuple[int, int, int, int]], now: datetime | None
                    days: int = 2) -> list[tuple[datetime, datetime, int]]:
     """The next occurrences (today + tomorrow) of each pinned LOCAL range as UTC-naive windows, past ones
     dropped. games=0 — a pin exists to WATCH LINES (pre-live arbs surface hours before a game starts), not
-    because games start inside it; the caller recounts after merging."""
+    because games start inside it; the caller recounts after merging.
+
+    Starts from YESTERDAY, like allowed_intervals: an overnight pin ('20:45-01:45') that opened yesterday is
+    still running after midnight, and generating only from today dropped it from the plan at the first
+    recompute past midnight - closing the browser mid-session (2026-11-09, for the evening plan). Any other
+    pin's yesterday is fully past and dropped below, so nothing else changes."""
     now = now or _utcnow()
     tz = datetime.now(timezone.utc).astimezone().tzinfo
     today = _local(now).date()
     out = []
     for h1, m1, h2, m2 in ranges:
-        for d in range(days):
+        for d in range(-1, days):
             day = today + timedelta(days=d)
             o_loc = datetime(day.year, day.month, day.day, h1, m1, tzinfo=tz)
             c_loc = datetime(day.year, day.month, day.day, h2, m2, tzinfo=tz)
