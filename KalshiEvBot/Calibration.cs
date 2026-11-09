@@ -3011,7 +3011,7 @@ public static class Calibration
         // A shadow pipeline has no fills, so the radar below prints nothing for it - this is its ORACLE DRIFT line.
         if (followPrefix.Contains("Shadow", StringComparison.Ordinal))
         {
-            try { SignalDrift(Directory.GetCurrentDirectory(), followPrefix); }
+            try { SignalDrift(Directory.GetCurrentDirectory(), followPrefix, settled); }
             catch (Exception ex)
             {
                 Console.WriteLine();
@@ -3030,8 +3030,14 @@ public static class Calibration
     /// rules (open and fresh); a refused reading leaves the side out rather than swapping in a later signal. What
     /// differs is "bought": the tennis radar takes it from real fills, here nothing was bought, so it is each
     /// signal's quoted edge at the REST ask - no walk - and the cushion is paired per signal (bought + drift).
+    ///
+    /// <para><b>The settled check under it.</b> The cushion stands in for settlement only if Pinnacle's T+300 price
+    /// is itself fair. Once a side settles, realised = bought + drift + (won - P_true at T+300) holds exactly, so
+    /// the last term tests that directly: ~0 means the cushion is the edge, clearly above 0 means the give-back
+    /// was not real and settlement is the number to trust. It is noisy (~4c per contract at n=150) - read its t.
+    /// Asked for 2026-11-09, when basketball's report showed a dollar profit beside a cushion of ~0.</para>
     /// </summary>
-    private static void SignalDrift(string dir, string followPrefix)
+    private static void SignalDrift(string dir, string followPrefix, IReadOnlyDictionary<string, SettlementRecord> settled)
     {
         var first = new Dictionary<string, FollowRow>(StringComparer.Ordinal);
         foreach (var r in ReportCache.LoadFollowUps(dir, followPrefix))
@@ -3061,6 +3067,7 @@ public static class Calibration
             double m = v.Average();
             return (v.Count, m, Math.Sqrt(v.Sum(x => (x - m) * (x - m)) / (v.Count - 1)) / Math.Sqrt(v.Count));
         }
+        static string Pm(double se) => double.IsNaN(se) ? " n/a" : se.ToString("0.00", CultureInfo.InvariantCulture);
         double band = GapBandCents;
         foreach (var sp in clean.GroupBy(r => Sport(r.Ticker)).OrderByDescending(g => g.Count()))
             foreach (var (lab, keep) in new (string, Func<FollowRow, bool>)[]
@@ -3078,7 +3085,6 @@ public static class Calibration
                 // the radar's colours: red = cushion negative at 2 sigma, yellow = negative at all
                 Console.ForegroundColor = cs > 0 && cm + 2 * cs < 0 ? ConsoleColor.Red
                                         : cm < 0 ? ConsoleColor.Yellow : ConsoleColor.Green;
-                static string Pm(double se) => double.IsNaN(se) ? " n/a" : se.ToString("0.00", CultureInfo.InvariantCulture);
                 Console.WriteLine($"   {(lab == "all" ? sp.Key : ""),-11} {lab,-9} n={n,4}  drift {dm:+0.00;-0.00}c +/-{Pm(ds)}   "
                                 + $"bought {l.Average(r => r.EntryEvCents):+0.00;-0.00}c   cushion {cm:+0.00;-0.00}c +/-{Pm(cs)} (t={t:+0.0;-0.0})"
                                 + (lab == "all" ? $"   since {l.Min(r => r.EntryAt):MM-dd}" : ""));
@@ -3086,6 +3092,27 @@ public static class Calibration
             }
         Console.WriteLine("   Read it like the radar's line: a cushion below zero means the winner's curse eats the whole edge");
         Console.WriteLine("   we would have bought. The gap bands keep a few wide gaps from masking the core band.");
+
+        // the same sides once settled: does the outcome side with Pinnacle's price at entry, or 5 minutes later?
+        Console.WriteLine("   DOES THE OUTCOME SIDE WITH THE 5-MINUTE PRICE?  (the same sides once settled, cents per contract)");
+        foreach (var sp in clean.GroupBy(r => Sport(r.Ticker)).OrderByDescending(g => g.Count()))
+        {
+            var s = sp.Select(r => (R: r, Won: settled.TryGetValue(r.Ticker, out var rec) ? rec.WonFor(r.Side) : null))
+                      .Where(x => x.Won.HasValue)
+                      .Select(x => (x.R, W: x.Won!.Value ? 1.0 : 0.0)).ToList();
+            if (s.Count < 2) continue;
+            var (n, am, asd) = MeanSe(s.Select(x => (x.W - x.R.NowPTrue) * 100).ToList());
+            var (_, rm, rsd) = MeanSe(s.Select(x => (x.W - x.R.EntryPTrue) * 100 + x.R.EntryEvCents).ToList());
+            double t = asd > 0 ? am / asd : 0;
+            // yellow only when the 5-minute price is off at 2 sigma, either way - that is when the cushion misleads
+            if (Math.Abs(t) >= 2) Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"   {sp.Key,-11} n={n,4}  realised {rm:+0.00;-0.00}c +/-{Pm(rsd)} = bought {s.Average(x => x.R.EntryEvCents):+0.00;-0.00} "
+                            + $"+ drift {s.Average(x => (x.R.NowPTrue - x.R.EntryPTrue) * 100):+0.00;-0.00} "
+                            + $"+ outcome vs Pinnacle at T+300 {am:+0.00;-0.00}c +/-{Pm(asd)} (t={t:+0.0;-0.0})");
+            Console.ResetColor();
+        }
+        Console.WriteLine("   The last term is ~0 when the 5-minute price was fair, so the cushion is the edge. Clearly above 0: the");
+        Console.WriteLine("   give-back was not real and settlement is the number to trust. Clearly below: even the 5-minute price was high.");
     }
 
     /// <summary>
