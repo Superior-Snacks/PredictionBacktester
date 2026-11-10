@@ -501,6 +501,9 @@ class PinnacleAdapter(BookAdapter):
         # (leagueId, frozenset(normalised player names)) -> ("{lid}:{mid}", {designation: name}, units).
         # The name-based twin of _live_child, for pushes that carry no parentId at all.
         self._live_by_names: dict = {}
+        # leagueId -> unix ts of its last push on a /live/* topic. A live replacement can only exist in a league
+        # that is pushing live, so _read_cache asks the players link only there (it is per-token work).
+        self._live_push_leagues: dict[str, float] = {}
         # "{lid}:{mid}" -> catalog-shaped description of a matchup the READER is seeing. Merged into
         # catalog() so pairing can reach live matchups the guest feed omits.
         self._live_meta: dict = {}
@@ -696,6 +699,7 @@ class PinnacleAdapter(BookAdapter):
         self._del_wiped_matchups = 0
         self._live_regressions = 0      # tokens observed going live -> pre WITHOUT a del
         self._parent_redirects = 0      # /odds served a LIVE child in place of a cached, non-live parent
+        self._name_redirects = 0        # ...of those, found by the PLAYERS because the child carried no parentId
         self._reseed_kept_live = 0      # in-play tokens a pre-match REST snapshot was NOT allowed to overwrite
         self._ever_live: set = set()    # every token that has EVER carried live=True this run
         self._ws_last_msg_ts = 0.0        # unix ts of the last odds frame from EITHER WS source
@@ -1131,7 +1135,7 @@ class PinnacleAdapter(BookAdapter):
         (that one is async and this runs inside the cache lock's caller). Empty when unknown."""
         cache = getattr(self, "_pair_names", None)
         if cache is None or time.time() - getattr(self, "_pair_names_ts", 0) > 300:
-            cache = {}
+            cache, starts, self._pair_keys = {}, {}, {}
             try:
                 path = Path(__file__).parent.parent / "cross_pairs.json"
                 for e in json.loads(path.read_text(encoding="utf-8")):
@@ -1140,13 +1144,19 @@ class PinnacleAdapter(BookAdapter):
                     if not (yn and nn):
                         continue
                     yt, nt = e.get("hardven_yes_token") or "", e.get("hardven_no_token") or ""
+                    st = (e.get("hardven_start_time") or "").strip()     # for _same_fixture
                     if yt.count(":") >= 2:
                         cache[yt] = (yn, nn)
+                        if st:
+                            starts[yt] = st
                     if nt.count(":") >= 2:
                         cache[nt] = (nn, yn)
+                        if st:
+                            starts[nt] = st
             except Exception:
                 cache = getattr(self, "_pair_names", None) or {}
-            self._pair_names, self._pair_names_ts = cache, time.time()
+                starts = getattr(self, "_pair_starts", None) or {}
+            self._pair_names, self._pair_starts, self._pair_names_ts = cache, starts, time.time()
         got = cache.get(sid)
         return got[0] if got else ""
 
@@ -1158,6 +1168,19 @@ class PinnacleAdapter(BookAdapter):
             self._pair_side_name(sid)                 # populates/refreshes the cache
             got = (getattr(self, "_pair_names", None) or {}).get(sid)
         return got if got else ()
+
+    def _pair_players_key(self, sid: str):
+        """frozenset of both normalised player names - the _live_by_names key - or None. Built once per token:
+        since 2026-11-10 every cached non-live token asks on every /odds call, and normalising the names each
+        time cost ~5ms a poll over ~800 tokens."""
+        keys = getattr(self, "_pair_keys", None)
+        if keys is None:
+            keys = self._pair_keys = {}
+        got = keys.get(sid)
+        if got is None:
+            both = self._pair_both_names(sid)
+            got = keys[sid] = frozenset(_norm_name(n) for n in both) if both else frozenset()
+        return got or None
 
     def _redirect_sid(self, sid: str) -> str:
         """A retired pre-match token -> the live matchup's token for the SAME side. "" when it cannot be done.
@@ -1181,9 +1204,11 @@ class PinnacleAdapter(BookAdapter):
             # NO parentId LINK — ask who is playing instead. The pairing recorded both Pinnacle names for
             # this token, so the fixture can be identified by its players and found among the matchups that
             # are actually pushing in the same league.
-            both = self._pair_both_names(sid)
-            if both:
-                got = self._live_by_names.get((parts[0], frozenset(_norm_name(n) for n in both)))
+            key = self._pair_players_key(sid)
+            if key:
+                got = self._live_by_names.get((parts[0], key))
+                if got and not self._same_fixture(sid, got[0]):
+                    got = None
         if not got:
             return ""
         child, names, units = got
@@ -1222,6 +1247,19 @@ class PinnacleAdapter(BookAdapter):
             self._deriv_names, self._deriv_names_ts = cache, time.time()
         got = cache.get(sid)
         return got if got else ("", None)
+
+    def _same_fixture(self, sid: str, child: str) -> bool:
+        """Is the live matchup the PLAYERS led to the fixture this token was paired on?
+
+        A tennis pair cannot meet twice in one tournament round, but a team-sport league is one id for the whole
+        season and the same two teams can play again days later. Matched by name alone, the live game today
+        would price the market for the rematch. So when both start times are known they must be within 12h of
+        each other. Unknown on either side = trust the names, as the name link always has."""
+        parts = sid.split(":")
+        mine = ((getattr(self, "_pair_starts", None) or {}).get(sid)
+                or (self._live_meta.get(f"{parts[0]}:{parts[1]}") or {}).get("start"))
+        a, b = _cutoff_ts(mine), _cutoff_ts((self._live_meta.get(child) or {}).get("start"))
+        return a is None or b is None or abs(a - b) <= 12 * 3600
 
     def _redirect_deriv(self, sid: str, parts: list) -> str:
         """A retired pre-match SPREAD/TOTAL token -> the live matchup's token for the same line and side.
@@ -1341,14 +1379,28 @@ class PinnacleAdapter(BookAdapter):
                 # simpler: a LIVE child is known and cached, and what we hold for the parent is NOT live.
                 # A live replacement existing IS the evidence the parent is retired. Only ever redirects
                 # TOWARD something the /live/* topic has tagged, never away from one.
+                #
+                # BY THE PLAYERS TOO, NOT ONLY BY parentId (2026-11-10). This branch asked _redirect_sid only
+                # when the parentId link existed; the players link was tried on a cache MISS alone, and the
+                # parent rarely misses - it sits here suspended or re-seeded. So a child pushed without a
+                # parentId stranded its pair until the 90-minute pairing run re-pointed it. Measured
+                # 11-03..11-10: 90 of 336 tennis matches Pinnacle offered live (27%), a median 70 minutes of
+                # play each. _redirect_sid tries parentId first, then the players (same league, same
+                # fixture by start time, side resolved by name), and the target must still be live.
                 if s is not None and not reader_mode and not getattr(s, "live", False):
                     _mid = ":".join(sid.split(":")[:2])
-                    if _mid in self._live_child:
+                    _by_id = _mid in self._live_child
+                    # the players link only in a league pushing live right now: it is per-token work on every
+                    # poll (+~5ms over ~800 pre-match tokens when asked everywhere), and a live child elsewhere
+                    # cannot exist
+                    if _by_id or now - self._live_push_leagues.get(_mid.split(":")[0], 0.0) < 600:
                         _r = self._redirect_sid(sid)
                         _c = self._cache.get(_r) if _r else None
                         if _c is not None and getattr(_c, "live", False):
                             s = _c
                             self._parent_redirects += 1
+                            if not _by_id:
+                                self._name_redirects += 1
                 if not s:
                     # FOLLOW THE FIXTURE IN-PLAY. Nothing is cached for this token because Pinnacle retired
                     # the matchup when the match went live (see _apply). If the push told us which matchup
@@ -2852,6 +2904,8 @@ class PinnacleAdapter(BookAdapter):
             return
         lid, mid = str(lid), str(mid)
         prefix = f"{lid}:{mid}:"
+        if live:
+            self._live_push_leagues[lid] = time.time()
         if self._ws_dump_path:
             self._dump_ws_record(data, lid, mid)
         # ── WHEN A MATCH GOES LIVE, PINNACLE RE-ISSUES THE MATCHUP ─────────────────────────────────────
@@ -2894,8 +2948,14 @@ class PinnacleAdapter(BookAdapter):
                              for pt in (rec.get("participants") or [])
                              if pt.get("alignment") in _SIDES and pt.get("name")}
                 if _by_desig:
-                    self._live_by_names[(str(lid), frozenset(_pn))] = (
-                        f"{lid}:{mid}", _by_desig, _strip_units(str(rec.get("units") or "")))
+                    # Not the "(Games)" twin: Pinnacle lists a tennis fixture as a Sets matchup and a Games
+                    # matchup with the SAME two players, and this index holds one entry per player pair -
+                    # whichever pushed last. The moneyline redirect refuses a Games matchup, so letting it win
+                    # the slot made the players link fail whenever the Games twin had ticked more recently
+                    # (2026-11-10). The catalog entry below still takes both: derivative pairing needs Games.
+                    if "game" not in str(rec.get("units") or "").lower():
+                        self._live_by_names[(str(lid), frozenset(_pn))] = (
+                            f"{lid}:{mid}", _by_desig, _strip_units(str(rec.get("units") or "")))
                     # Everything needed to DESCRIBE this matchup the way /catalog does. The guest feed does
                     # not carry the live matchups at all — measured 2026-08-21, the catalog knew 0 of the 13
                     # the reader was pushing — so pairing could never reach them and the whole in-play board
@@ -3068,6 +3128,7 @@ class PinnacleAdapter(BookAdapter):
             "del_wiped_matchups": self._del_wiped_matchups,
             "live_regressions": self._live_regressions,
             "parent_redirects": self._parent_redirects,
+            "name_redirects": self._name_redirects,
             # pre-match REST snapshots that tried to overwrite an IN-PLAY price and were refused (each one was a
             # frozen pre-match line served as live before 2026-10-05) — see _apply_straight_markets
             "reseed_kept_live": self._reseed_kept_live,

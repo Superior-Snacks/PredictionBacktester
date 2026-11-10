@@ -100,7 +100,16 @@ _TEAM_ALIASES = {"a s": "athletics", "as": "athletics", "oakland": "athletics", 
                  "alliance sport alsace": "alsace",                # AS Alsace Gries-Souffel
                  "hermine nantes basket": "nantes",                # Nantes Atlantique
                  "rouen metropole basket": "rouen",                # Rouen
-                 "bc uniks kazan": "unics kazan"}                  # UNICS Kazan
+                 "bc uniks kazan": "unics kazan",                  # UNICS Kazan
+                 # 2026-11-10 - US college basketball, Kalshi's school name vs Pinnacle's (guest league 493):
+                 "detroit mercy": "detroit",                       # Detroit
+                 "queens university": "queens",                    # Queens
+                 "ole miss": "mississippi",                        # Mississippi
+                 "southeastern louisiana": "se louisiana",         # SE Louisiana
+                 "southern university": "southern",                # Southern
+                 "louisiana monroe": "ul monroe",                  # UL - Monroe
+                 "maryland eastern shore": "md eastern shore",     # MD Eastern Shore
+                 "ucf": "central florida"}                         # Central Florida
 
 
 def _canon(key: str) -> str:
@@ -168,6 +177,21 @@ def _canon_team(key: str, ticker: str) -> str:
         if city and nick:
             return f"{city} {nick}"
     return _canon(key)
+
+
+def _pick_yes_team(outcome: str, team_keys, ticker: str):
+    """_pick_book_team, plus one tie-break for basketball.
+
+    FLORIDA vs FLORIDA STATE (2026-11-10). In college basketball one school's name is often inside the other's
+    (Arizona / Northern Arizona, Iowa / Iowa State), so containment scores the two sides within the refusal
+    margin and both markets of the game went unpaired. An EXACT name is the strongest evidence there is: when the
+    outcome equals one Pinnacle team and only that one, it is that team. The mirror assertion in main() still
+    checks that the game's other market lands on the other side."""
+    keys = list(team_keys)
+    got = _pick_book_team(outcome, keys)
+    if not got and (ticker or "").split("-")[0].upper() in _BB_SERIES and sum(k == outcome for k in keys) == 1:
+        got = outcome
+    return got
 
 
 # ── league URL (for the browser-WS tab manager: open one tab per gap league) ────
@@ -490,7 +514,7 @@ def main() -> None:
                 unmatched.append(f"{tk} (Tie, but no Pinnacle draw selection)")
                 continue
         else:
-            yes_key = _pick_book_team(yes_outcome, entry["teams"].keys())
+            yes_key = _pick_yes_team(yes_outcome, entry["teams"].keys(), tk)
             if not yes_key:
                 unmatched.append(f"{tk} (outcome '{yes_outcome}' not resolvable to a Pinnacle team)")
                 continue

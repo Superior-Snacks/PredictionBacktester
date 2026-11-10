@@ -111,6 +111,12 @@ check("a Women's league is NOT kept by a men's pattern",
 check("...but is by a pattern that says Women", S.league_wanted("NCAA Women", ("ncaa", "ncaa women")))
 check("the 2nd tier is not the 1st", not S.league_wanted("Turkey - TBL First League", ("turkey - super league",)))
 check("no pattern, no league", not S.league_wanted("NBA", ()))
+check("'^' anchors the start: US college NCAA, not Philippines - NCAA (walked 2026-11-09)",
+      S.league_wanted("NCAA", ("^ncaa",)) and not S.league_wanted("Philippines - NCAA", ("^ncaa",)))
+check("...and the Women's rule still applies to it", not S.league_wanted("NCAA Women", ("^ncaa",)))
+check("the shipped college pattern keeps NCAA only",
+      S.league_wanted("NCAA", S.PINNACLE_LEAGUES["KXNCAAMBGAME"])
+      and not S.league_wanted("Philippines - NCAA", S.PINNACLE_LEAGUES["KXNCAAMBGAME"]))
 
 print("\n[2] the real 2026-10-16 board, every series allowed")
 bb = kept_ids(BOARD_4, pats_for(S.CATALOG["basketball"].moneyline))

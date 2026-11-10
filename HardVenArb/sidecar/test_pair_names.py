@@ -78,5 +78,31 @@ check("MLB alias unchanged", P._canon_team("a s", "KXMLBGAME-X-Y") == "athletics
 check("hockey alias unchanged", P._canon_team("red bull munich", "KXDELGAME-X-Y") == "munchen")
 check("a basketball ALIAS wins over the strip", P._canon_team("cb coruna", "KXACBGAME-X-Y") == "coruna")
 
+print("\n[5] the 2026-11-10 US college board (guest league 493): Kalshi school -> Pinnacle name, a clean 100")
+NCAA = "KXNCAAMBGAME-26NOV10XXXYYY-XXX"
+for k, b in [("Detroit Mercy", "Detroit"), ("Queens University", "Queens"), ("Ole Miss", "Mississippi"),
+             ("Southeastern Louisiana", "SE Louisiana"), ("Southern University", "Southern"),
+             ("Louisiana-Monroe", "UL - Monroe"), ("Maryland-Eastern Shore", "MD Eastern Shore"),
+             ("UCF", "Central Florida"),
+             # already fine by containment - must stay fine
+             ("Florida St.", "Florida State"), ("Middle Tennessee", "Middle Tennessee State"),
+             ("Kennesaw St.", "Kennesaw St"), ("Little Rock", "Arkansas Little Rock")]:
+    folded = P._canon_team(_norm(k), NCAA)
+    sim = _team_sim(folded, _book_name(b))
+    check(f"{k!r} -> {b!r}", sim == 100, f"folded {folded!r}, score {sim}")
+
+print("\n[6] one school inside the other: the EXACT name decides (basketball only)")
+fl = [_book_name("Florida"), _book_name("Florida State")]
+az = [_book_name("Northern Arizona"), _book_name("Arizona")]
+check("the plain matcher refuses Florida vs Florida State (it is too close to call)", _pick_book_team("florida", fl) is None)
+check("YES 'florida' -> Florida", P._pick_yes_team("florida", fl, NCAA) == "florida")
+check("YES 'arizona' -> Arizona, not Northern Arizona", P._pick_yes_team("arizona", az, NCAA) == "arizona")
+check("YES 'northern arizona' -> Northern Arizona", P._pick_yes_team("northern arizona", az, NCAA) == "northern arizona")
+check("no exact name ('florida st') is still refused, not guessed", P._pick_yes_team("florida st", fl, NCAA) is None)
+check("outside basketball the plain matcher's answer stands",
+      P._pick_yes_team("florida", fl, "KXNFLGAME-X-Y") == _pick_book_team("florida", fl))
+check("a clear case is unchanged", P._pick_yes_team("evansville", [_book_name("Evansville"),
+      _book_name("Middle Tennessee State")], NCAA) == "evansville")
+
 print(f"\n{'=' * 58}\n  {PASS} passed, {FAIL} failed\n{'=' * 58}")
 sys.exit(1 if FAIL else 0)

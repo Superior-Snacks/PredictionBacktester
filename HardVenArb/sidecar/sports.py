@@ -269,7 +269,8 @@ def moneyline_series(quiet: bool = False) -> set[str]:
 #
 # So for a sport with entries here, the walk keeps only the leagues of the series HARDVEN_SERIES_ALLOW allows.
 # Each entry is a case-insensitive SUBSTRING of Pinnacle's league name ("$" at the end = the name must END
-# there, so "germany - del$" is the DEL and not "Germany - DEL 2"). A league whose name says "Women" is kept
+# there, so "germany - del$" is the DEL and not "Germany - DEL 2"; "^" at the start = it must START there, so
+# "^ncaa" is the US college league and not "Philippines - NCAA"). A league whose name says "Women" is kept
 # only by a pattern that says so too. Names marked * were OBSERVED in that listing; the rest are seasonal
 # leagues Pinnacle was not listing that day, named after its convention. A wrong or missing name costs that
 # league's pairs, never a wrong pair - and the walk logs every league it skipped once per sidecar run.
@@ -278,7 +279,7 @@ PINNACLE_LEAGUES: dict[str, tuple[str, ...]] = {
     # basketball
     "KXNBAGAME": ("nba",),                        # * "NBA", "NBA Preseason" (Kalshi lists preseason games too)
     "KXWNBAGAME": ("wnba",),                      # * "WNBA"
-    "KXNCAAMBGAME": ("ncaa",), "KXNCAABGAME": ("ncaa",),   # * "NCAA"
+    "KXNCAAMBGAME": ("^ncaa",), "KXNCAABGAME": ("^ncaa",),   # * "NCAA" - not "Philippines - NCAA" (walked 11-09)
     "KXNCAAWBGAME": ("ncaa women", "ncaaw"),
     "KXEUROLEAGUEGAME": ("euroleague",), "KXEUROCUPGAME": ("eurocup",),
     "KXACBGAME": ("spain - acb",),                # *
@@ -336,7 +337,10 @@ def league_wanted(name: str, patterns) -> bool:
 
     def hit(p: str) -> bool:
         p = p.lower()
-        return n.endswith(p[:-1]) if p.endswith("$") else p in n
+        head, tail = p.startswith("^"), p.endswith("$")
+        core = p[1 if head else 0:len(p) - 1 if tail else len(p)]
+        return ((not head or n.startswith(core)) and (not tail or n.endswith(core))
+                and (head or tail or core in n))
 
     matched = [p for p in patterns if hit(p)]
     if not matched:
