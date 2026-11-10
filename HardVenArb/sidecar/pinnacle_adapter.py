@@ -145,6 +145,15 @@ def _strip_units(name: str) -> str:
     return (name or "").split("(")[0].strip()
 
 
+def _mid_num(mid) -> int:
+    """A matchup id as a number (ids are issued in increasing order: a live replacement is always newer than
+    the matchup it replaces). 0 when it is not numeric."""
+    try:
+        return int(str(mid))
+    except (TypeError, ValueError):
+        return 0
+
+
 # ── UI bet placement (in-page scripts) ────────────────────────────────────────
 # Captured from a real manual bet 2026-07-20. The Quick Bet popover is `#quick-bet-portal`; the stake box is
 # `input[aria-label="Currency Input"]`; submit is a button reading "Place Bet". Everything else in that subtree
@@ -1200,6 +1209,8 @@ class PinnacleAdapter(BookAdapter):
         if len(parts) != 3 or parts[2] not in _SIDES:
             return ""
         got = self._live_child.get(f"{parts[0]}:{parts[1]}")
+        if got and not self._replaces(f"{parts[0]}:{parts[1]}", got[2]):
+            got = None              # only a twin is linked (Games / props): not this market's child - ask by players
         if not got:
             # NO parentId LINK — ask who is playing instead. The pairing recorded both Pinnacle names for
             # this token, so the fixture can be identified by its players and found among the matchups that
@@ -1207,7 +1218,10 @@ class PinnacleAdapter(BookAdapter):
             key = self._pair_players_key(sid)
             if key:
                 got = self._live_by_names.get((parts[0], key))
-                if got and not self._same_fixture(sid, got[0]):
+                if got and got[0] == f"{parts[0]}:{parts[1]}":
+                    got = None      # the players lead back to this very matchup: no replacement yet (the usual
+                    #                 pre-match answer, so it skips the start-time parse and the name match)
+                elif got and not self._same_fixture(sid, got[0]):
                     got = None
         if not got:
             return ""
@@ -1261,6 +1275,15 @@ class PinnacleAdapter(BookAdapter):
         a, b = _cutoff_ts(mine), _cutoff_ts((self._live_meta.get(child) or {}).get("start"))
         return a is None or b is None or abs(a - b) <= 12 * 3600
 
+    def _replaces(self, parent_key: str, units: str) -> bool:
+        """Can a child with these units be the parent's LIVE REPLACEMENT - the same market re-issued in-play -
+        rather than a twin hung on the same parentId (tennis "(Games)", MLB prop matchups)? The replacement has
+        the parent's own units (Sets -> Sets, Regular -> Regular) when the parent's record has been seen;
+        otherwise (or when either side's units are blank) anything but a Games twin."""
+        pu = str((self._live_meta.get(parent_key) or {}).get("units") or "").lower()
+        u = str(units or "").lower()
+        return u == pu if (pu and u) else "game" not in u
+
     def _redirect_deriv(self, sid: str, parts: list) -> str:
         """A retired pre-match SPREAD/TOTAL token -> the live matchup's token for the same line and side.
 
@@ -1274,7 +1297,8 @@ class PinnacleAdapter(BookAdapter):
         (the moneyline) and a Games matchup (spreads and totals in games) — with the SAME two players and
         adjacent ids. `_live_by_names` keys on league + player names and therefore holds whichever of the two
         pushed last; asking it for a Games parent could hand back the Sets child, whose "total 21.5" is a
-        different market entirely. `_live_child` is keyed on the exact parent id and cannot be confused.
+        different market entirely. `_live_child` is keyed on the exact parent id, and only a child of the
+        parent's own kind may be followed from it (the twins hang on the same parentId - see _apply).
 
         THE LINE IS CARRIED, NOT RE-DERIVED. In-play the main line moves (a pre-match 22.5 total is a 20.5
         after a set), but Pinnacle streams a ladder of alternates and the paired line is usually still on
@@ -1288,8 +1312,8 @@ class PinnacleAdapter(BookAdapter):
         """
         lid, mid, kind, pts, desig = parts
         got = self._live_child.get(f"{lid}:{mid}")
-        if not got:
-            return ""
+        if not got or not self._replaces(f"{lid}:{mid}", got[2]):
+            return ""             # nothing linked, or only a twin: a Games "spread -1.5" is not a Sets "spread -1.5"
         child, names, _units = got
         if kind == "total":
             return f"{child}:total:{pts}:{desig}" if desig in ("over", "under") else ""
@@ -1380,26 +1404,29 @@ class PinnacleAdapter(BookAdapter):
                 # A live replacement existing IS the evidence the parent is retired. Only ever redirects
                 # TOWARD something the /live/* topic has tagged, never away from one.
                 #
-                # BY THE PLAYERS TOO, NOT ONLY BY parentId (2026-11-10). This branch asked _redirect_sid only
-                # when the parentId link existed; the players link was tried on a cache MISS alone, and the
-                # parent rarely misses - it sits here suspended or re-seeded. So a child pushed without a
-                # parentId stranded its pair until the 90-minute pairing run re-pointed it. Measured
-                # 11-03..11-10: 90 of 336 tennis matches Pinnacle offered live (27%), a median 70 minutes of
-                # play each. _redirect_sid tries parentId first, then the players (same league, same
-                # fixture by start time, side resolved by name), and the target must still be live.
+                # STRANDED PAIRS (2026-11-10). Measured 11-03..11-10: 90 of 336 tennis matches Pinnacle offered
+                # live (27%) waited for the 90-minute pairing run, a median 70 minutes of play each. The first
+                # guess - a live child pushed with no parentId - added the players link below and changed
+                # nothing (0 players redirects in the first live session, 4 of 16 matches still stranded).
+                # The real cause: the "(Games)" twin hangs on the SAME parentId as the live Sets child, the
+                # single parent slot went to whichever pushed last, and a Games child is refused - so the
+                # followed matches got about half their polls and the rest none. _apply now keeps the slot for
+                # the parent's own kind of child (_replaces). _redirect_sid tries that link first, then the
+                # players (same league, same fixture by start time, side resolved by name), and the target
+                # must still be live. A link that only reaches a twin counts as no link.
                 if s is not None and not reader_mode and not getattr(s, "live", False):
                     _mid = ":".join(sid.split(":")[:2])
-                    _by_id = _mid in self._live_child
+                    _lc = self._live_child.get(_mid)
                     # the players link only in a league pushing live right now: it is per-token work on every
                     # poll (+~5ms over ~800 pre-match tokens when asked everywhere), and a live child elsewhere
                     # cannot exist
-                    if _by_id or now - self._live_push_leagues.get(_mid.split(":")[0], 0.0) < 600:
+                    if _lc is not None or now - self._live_push_leagues.get(_mid.split(":")[0], 0.0) < 600:
                         _r = self._redirect_sid(sid)
                         _c = self._cache.get(_r) if _r else None
                         if _c is not None and getattr(_c, "live", False):
                             s = _c
                             self._parent_redirects += 1
-                            if not _by_id:
+                            if _lc is None or not _r.startswith(_lc[0] + ":"):
                                 self._name_redirects += 1
                 if not s:
                     # FOLLOW THE FIXTURE IN-PLAY. Nothing is cached for this token because Pinnacle retired
@@ -2953,9 +2980,16 @@ class PinnacleAdapter(BookAdapter):
                     # whichever pushed last. The moneyline redirect refuses a Games matchup, so letting it win
                     # the slot made the players link fail whenever the Games twin had ticked more recently
                     # (2026-11-10). The catalog entry below still takes both: derivative pairing needs Games.
+                    # ...and the NEWEST matchup keeps it. Pinnacle re-sends a retired parent's record along with
+                    # its family's (the July feed recording: the pre-match Sets matchup pushed as often as its
+                    # live child), so last-writer-wins handed the slot back to the retired parent on every one of
+                    # those. A live replacement is always a newer matchup than the one it replaces.
                     if "game" not in str(rec.get("units") or "").lower():
-                        self._live_by_names[(str(lid), frozenset(_pn))] = (
-                            f"{lid}:{mid}", _by_desig, _strip_units(str(rec.get("units") or "")))
+                        _nk = (str(lid), frozenset(_pn))
+                        _held = self._live_by_names.get(_nk)
+                        if _held is None or _mid_num(mid) >= _mid_num(_held[0].split(":")[-1]):
+                            self._live_by_names[_nk] = (
+                                f"{lid}:{mid}", _by_desig, _strip_units(str(rec.get("units") or "")))
                     # Everything needed to DESCRIBE this matchup the way /catalog does. The guest feed does
                     # not carry the live matchups at all — measured 2026-08-21, the catalog knew 0 of the 13
                     # the reader was pushing — so pairing could never reach them and the whole in-play board
@@ -2978,8 +3012,18 @@ class PinnacleAdapter(BookAdapter):
                 if al in _SIDES and pt.get("name"):
                     names[al] = _strip_units(pt["name"])
             if names:
-                self._live_child[f"{lid}:{parent}"] = (f"{lid}:{mid}", names,
-                                                       _strip_units(str(rec.get("units") or "")))
+                # ONE SLOT PER PARENT, AND THE TWINS SHARE THE PARENT (2026-11-10). Pinnacle hangs the "(Games)"
+                # twin - pre-match and live - on the same parentId as the live Sets child (MLB hangs its prop
+                # matchups there too), so last-writer-wins gave the slot to whichever pushed last, and the
+                # moneyline redirect refuses a Games child. Measured 11-10: the tennis matches that were
+                # "followed" got about half their in-play polls, and 4 of 16 got none until the 90-minute
+                # re-pair; replaying the July feed recording, the slot held the live Sets child 19% of the time.
+                # Only a child of the parent's own kind (its live replacement) is recorded now. A twin was never
+                # usable from here: the moneyline refuses a Games child, and a Games "spread -1.5" is not the
+                # Sets "spread -1.5" a derivative token holds.
+                _pk, _u = f"{lid}:{parent}", _strip_units(str(rec.get("units") or ""))
+                if self._replaces(_pk, _u):
+                    self._live_child[_pk] = (f"{lid}:{mid}", names, _u)
         if data.get("op") == "del":
             with self._cache_lock:
                 doomed = [k for k in self._cache if k.startswith(prefix)]
