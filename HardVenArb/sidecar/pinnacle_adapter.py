@@ -582,6 +582,18 @@ class PinnacleAdapter(BookAdapter):
                   "(90MB over a week). Unset it for production / long unattended runs.")
         self._ws_dump_path = os.environ.get("PINNACLE_WS_DUMP", "")          # JSONL dump of EVERY incoming WS record
         self._ws_dump_fh = None                                              # (derivative recon: do Games matchups arrive?)
+        # The dump STOPS ITSELF (2026-11-11) so a recon run needs one restart, not two: after this many hours from
+        # its first record, or this many MB, whichever comes first. ~3.6 records/s in a session, ~1 KB each
+        # compact and a few KB with PINNACLE_WS_DUMP_FULL=1.
+        try:
+            self._ws_dump_max_sec = float(os.environ.get("PINNACLE_WS_DUMP_HOURS") or 16) * 3600
+        except ValueError:
+            self._ws_dump_max_sec = 16 * 3600.0
+        try:
+            self._ws_dump_max_bytes = float(os.environ.get("PINNACLE_WS_DUMP_MAX_MB") or 3000) * 1e6
+        except ValueError:
+            self._ws_dump_max_bytes = 3000 * 1e6
+        self._ws_dump_t0, self._ws_dump_bytes = 0.0, 0
         # ── session SOURCE: "env" (DEFAULT — creds from PINNACLE_SESSION/.env, paste-the-token) or "browser"
         # (a managed, logged-in Playwright window mints + HOLDS the session and feeds creds in LIVE; see
         # pinnacle_session.py). In browser mode the feed stays idle until login is captured (_session_ready).
@@ -1283,6 +1295,63 @@ class PinnacleAdapter(BookAdapter):
         pu = str((self._live_meta.get(parent_key) or {}).get("units") or "").lower()
         u = str(units or "").lower()
         return u == pu if (pu and u) else "game" not in u
+
+    def explain_redirect(self, sid: str) -> dict:
+        """READ-ONLY DIAGNOSTIC (/debug/redirect, 2026-11-11): why the in-play hand-off does or does not follow one
+        paired token right now. The parent as cached, its parentId link (and whether that child is the parent's
+        own kind), the players link, what _redirect_sid resolves to, the target as cached, and every matchup the
+        live catalog holds with the same two players in this league. After fix 2, 6 of 48 tennis matches still
+        waited for the re-pair, with no league, start-time or name difference to explain it. Changes nothing."""
+        now = time.time()
+        parts = sid.split(":")
+        mk = ":".join(parts[:2])
+
+        def cached(k):
+            s = self._cache.get(k) if k else None
+            if s is None:
+                return None
+            return {"id": k, "live": bool(getattr(s, "live", False)), "status": s.status, "odds": s.decimal_odds,
+                    "cutoff_in_s": round(s.cutoff - now) if s.cutoff else None, "age_s": round(now - s.ts, 1)}
+
+        def meta(k):
+            m = self._live_meta.get(k) if k else None
+            if not m:
+                return None
+            return {"units": m.get("units"), "start": m.get("start"), "names": m.get("names"),
+                    "last_push_s": round(now - m.get("ts", now), 1)}
+
+        with self._cache_lock:
+            key = self._pair_players_key(sid) if len(parts) == 3 else None
+            lc = self._live_child.get(mk)
+            nb = self._live_by_names.get((parts[0], key)) if key else None
+            out = {
+                "sid": sid,
+                "parent": cached(sid),
+                "parent_meta": meta(mk),
+                "pair_names": list(self._pair_both_names(sid)),
+                "pair_start": (getattr(self, "_pair_starts", None) or {}).get(sid),
+                "league_last_live_push_s": (round(now - self._live_push_leagues[parts[0]], 1)
+                                            if parts[0] in self._live_push_leagues else None),
+                "parentid_link": ({"child": lc[0], "units": lc[2], "names": lc[1],
+                                   "is_replacement": self._replaces(mk, lc[2]), "child_meta": meta(lc[0])}
+                                  if lc else None),
+                "players_link": ({"holder": nb[0], "units": nb[2], "names": nb[1],
+                                  "same_fixture": self._same_fixture(sid, nb[0]), "holder_meta": meta(nb[0])}
+                                 if nb else None),
+            }
+            red = self._redirect_sid(sid)
+            out["redirect"] = red or None
+            out["redirect_target"] = cached(red)
+        if key:
+            # Every listing with these two players in this league - a second live listing would show up here.
+            out["same_players_in_league"] = sorted(
+                ({"mid": k, "units": m.get("units"), "start": m.get("start"),
+                  "last_push_s": round(now - m.get("ts", now), 1), "home_cached": cached(f"{k}:home")}
+                 for k, m in list(self._live_meta.items())
+                 if k.split(":")[0] == parts[0]
+                 and frozenset(_norm_name(_strip_units(n)) for n in (m.get("names") or {}).values()) == key),
+                key=lambda d: d["mid"])
+        return out
 
     def _redirect_deriv(self, sid: str, parts: list) -> str:
         """A retired pre-match SPREAD/TOTAL token -> the live matchup's token for the same line and side.
@@ -2446,7 +2515,8 @@ class PinnacleAdapter(BookAdapter):
             data = json.loads(msg.payload.decode("utf-8"))
         except Exception:
             return
-        live = "/live/" in (getattr(msg, "topic", "") or "")   # topic = IN-PLAY (…/live/*) vs pre-match (…/pre)
+        topic = getattr(msg, "topic", "") or ""
+        live = "/live/" in topic                                # topic = IN-PLAY (…/live/*) vs pre-match (…/pre)
         if live:
             self._ws_live_msgs += 1
         else:
@@ -2460,7 +2530,7 @@ class PinnacleAdapter(BookAdapter):
             print("[PINNACLE WS] frames flowing again - silence state cleared, quotes stamp fresh from here.",
                   flush=True)
         try:
-            self._apply(data, live)
+            self._apply(data, live, topic)
         except Exception as ex:
             print(f"[PINNACLE WS] apply error: {type(ex).__name__}: {ex}")
 
@@ -2488,7 +2558,7 @@ class PinnacleAdapter(BookAdapter):
             if "/sp/" in (topic or ""):        # SPORT-level topic = the featured board (main page), not a league tab
                 self._board_odds_lid_ts[str(lid)] = self._browser_odds_last       # → this league is board-covered
         try:
-            self._apply(data, live)
+            self._apply(data, live, topic or "")
         except Exception as ex:
             print(f"[PINNACLE WINDOW-WS] apply error: {type(ex).__name__}: {ex}")
 
@@ -2923,7 +2993,7 @@ class PinnacleAdapter(BookAdapter):
                 del self._browser_odds_mid_ts[k]
         return out
 
-    def _apply(self, data: dict, live: bool = False) -> None:
+    def _apply(self, data: dict, live: bool = False, topic: str = "") -> None:
         rec = data.get("rec") or {}
         mid = rec.get("id") if rec.get("id") is not None else data.get("pk")
         lid = (rec.get("league") or {}).get("id")
@@ -2934,7 +3004,7 @@ class PinnacleAdapter(BookAdapter):
         if live:
             self._live_push_leagues[lid] = time.time()
         if self._ws_dump_path:
-            self._dump_ws_record(data, lid, mid)
+            self._dump_ws_record(data, lid, mid, live, topic)
         # ── WHEN A MATCH GOES LIVE, PINNACLE RE-ISSUES THE MATCHUP ─────────────────────────────────────
         # The pre-match matchup does not go in-play; a NEW one is created with the old id as its `parentId`,
         # and the old one leaves the board. Confirmed 2026-08-20 across three fixtures, e.g. Steur vs
@@ -3183,7 +3253,7 @@ class PinnacleAdapter(BookAdapter):
             "ts": now,
         }
 
-    def _dump_ws_record(self, data: dict, lid: str, mid: str) -> None:
+    def _dump_ws_record(self, data: dict, lid: str, mid: str, live: bool = False, topic: str = "") -> None:
         """RECON (PINNACLE_WS_DUMP=<path>): append a compact summary of EVERY incoming WS record so we can see
         whether the '(Games)' DERIVATIVE matchups (spread/total/team_total) arrive over the current league-level
         subscription, or ride a different topic that needs an extra subscribe. Captures matchupId, the participant
@@ -3206,6 +3276,9 @@ class PinnacleAdapter(BookAdapter):
                              "desig": [pr.get("designation") for pr in prices],
                              "price0": prices[0] if prices else None})  # full first price (spot any per-price suspend field)
             out = {"ts": round(time.time(), 3), "op": data.get("op"), "lid": lid, "mid": mid,
+                   # WHICH CHANNEL (2026-11-11): /live/* tags a token in-play, /pre does not, so the hand-off
+                   # replay needs the topic to rebuild the cache the redirect actually saw.
+                   "live": bool(live), "topic": topic,
                    "units": rec.get("units"), "parentId": rec.get("parentId"),
                    "names": [p.get("name") for p in (rec.get("participants") or [])],
                    "markets": mkts}
@@ -3214,10 +3287,32 @@ class PinnacleAdapter(BookAdapter):
             line = json.dumps(out, default=str)
             if self._ws_dump_fh is None:
                 self._ws_dump_fh = open(self._ws_dump_path, "a", encoding="utf-8")
+                self._ws_dump_t0 = time.time()
+                print(f"[PINNACLE] WS dump RECORDING every feed record -> {self._ws_dump_path} "
+                      f"({'full' if full else 'compact'}; stops by itself after "
+                      f"{self._ws_dump_max_sec / 3600:.0f}h or {self._ws_dump_max_bytes / 1e6:.0f} MB).", flush=True)
             self._ws_dump_fh.write(line + "\n")
             self._ws_dump_fh.flush()
+            self._ws_dump_bytes += len(line) + 1
+            ran = time.time() - self._ws_dump_t0
+            if ran > self._ws_dump_max_sec or self._ws_dump_bytes > self._ws_dump_max_bytes:
+                self._ws_dump_fh.close()
+                self._ws_dump_fh = None
+                print(f"[PINNACLE] WS dump STOPPED after {ran / 3600:.1f}h / {self._ws_dump_bytes / 1e6:.0f} MB "
+                      f"(PINNACLE_WS_DUMP_HOURS / PINNACLE_WS_DUMP_MAX_MB): {self._ws_dump_path}. "
+                      f"Take PINNACLE_WS_DUMP out of .env before the next restart.", flush=True)
+                self._ws_dump_path = ""
         except Exception as ex:
-            print(f"[PINNACLE] WS dump error: {type(ex).__name__}: {ex}")
+            # Stop rather than repeat: at ~3.6 records/s a failing write (disk full, bad path) would print this
+            # line a dozen thousand times an hour, and the dump is recon - the feed must not notice it.
+            print(f"[PINNACLE] WS dump error, recording STOPPED: {type(ex).__name__}: {ex}", flush=True)
+            self._ws_dump_path = ""
+            try:
+                if self._ws_dump_fh is not None:
+                    self._ws_dump_fh.close()
+            except Exception:
+                pass
+            self._ws_dump_fh = None
 
     # ── REST fallback odds source (designation read directly from each price, like the WS) ──
     async def _refresh_loop(self) -> None:

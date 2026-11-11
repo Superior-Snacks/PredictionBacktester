@@ -12,8 +12,10 @@ whichever pushed last and a Games child is refused. Exercises the REAL `_apply`,
 
     python test_live_handoff.py            # all PASS expected
 """
+import json
 import os
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -192,6 +194,43 @@ def main() -> int:
     v._apply(push(GAMES, "Anna Alpha", "Bea Beta", -400, +300, units="Games", parent=PARENT), live=True)
     r.append(check("...and follows the Sets child once it has pushed", v._redirect_sid(DTOK),
                    f"{LID}:{CHILD}:spread:-1.5:home"))
+
+    # ── DIAGNOSTICS (2026-11-11): the read-only explanation and the self-stopping raw-feed recorder ──
+    # 16. /debug/redirect explains the case above and changes nothing
+    w = adapter()
+    w._apply(push(PARENT, "Anna Alpha", "Bea Beta", -120, +100), live=False)
+    w._apply(push(CHILD, "Anna Alpha", "Bea Beta", -150, +130, parent=PARENT), live=True)
+    w._apply(push(GAMES, "Anna Alpha", "Bea Beta", -400, +300, units="Games", parent=PARENT), live=True)
+    before = (w._parent_redirects, w._name_redirects, dict(w._live_child))
+    ex = w.explain_redirect(P_HOME)
+    r.append(check("explain: the parentId link is the Sets child, and it is the parent's own kind",
+                   (ex["parentid_link"]["child"], ex["parentid_link"]["is_replacement"]), (f"{LID}:{CHILD}", True)))
+    r.append(check("explain: resolves to the child's token, which is cached live",
+                   (ex["redirect"], ex["redirect_target"]["live"]), (f"{LID}:{CHILD}:home", True)))
+    r.append(check("explain: lists every listing of these two players in the league",
+                   [d["mid"] for d in ex["same_players_in_league"]],
+                   sorted([f"{LID}:{PARENT}", f"{LID}:{CHILD}", f"{LID}:{GAMES}"])))
+    r.append(check("explain: read-only (counters and links untouched)",
+                   (w._parent_redirects, w._name_redirects, dict(w._live_child)), before))
+    json.dumps(ex)                                               # must serialise for the endpoint
+
+    # 17. the recorder writes the channel, and stops itself at its size cap
+    fd, path = tempfile.mkstemp(suffix=".jsonl")
+    os.close(fd)
+    x = adapter()
+    x._ws_dump_path = path
+    x._apply(push(CHILD, "Anna Alpha", "Bea Beta", -150, +130, parent=PARENT), live=True,
+             topic=f"matchups/reg/lg/{LID}/live/ld")
+    rec0 = json.loads(open(path, encoding="utf-8").read().splitlines()[0])
+    r.append(check("recorder: the channel is on the record", (rec0["live"], rec0["topic"]),
+                   (True, f"matchups/reg/lg/{LID}/live/ld")))
+    x._ws_dump_max_bytes = 1                                     # cap reached on the next write
+    x._apply(push(PARENT, "Anna Alpha", "Bea Beta", -120, +100), live=False, topic=f"matchups/reg/lg/{LID}/pre")
+    x._apply(push(PARENT, "Anna Alpha", "Bea Beta", -125, +105), live=False, topic=f"matchups/reg/lg/{LID}/pre")
+    lines = open(path, encoding="utf-8").read().splitlines()
+    r.append(check("recorder: stops itself at the cap (no third line, file closed)",
+                   (len(lines), x._ws_dump_path, x._ws_dump_fh), (2, "", None)))
+    os.remove(path)
 
     n = sum(r)
     print(f"\n{n}/{len(r)} passed")

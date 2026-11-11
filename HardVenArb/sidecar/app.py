@@ -409,6 +409,17 @@ async def debug_inplay():
     return fn()
 
 
+@app.get("/debug/redirect")
+async def debug_redirect(sid: str = Query(..., description="one paired token, e.g. 213002:1640315414:home")):
+    """WHY IS THIS PAIRED MATCH NOT FOLLOWED INTO PLAY? Read-only: the parent as cached, its parentId and players
+    links, what the redirect resolves to, and every listing with the same two players in the league. Asks Pinnacle
+    nothing. See PinnacleAdapter.explain_redirect."""
+    fn = getattr(adapter, "explain_redirect", None)
+    if not callable(fn):
+        raise HTTPException(404, f"book '{adapter.name}' has no redirect diagnostics")
+    return fn(sid)
+
+
 @app.post("/debug/aim")
 async def debug_aim(selection_id: str):
     """Move the PHYSICAL cursor onto this selection's price cell and stop. Presses nothing.
