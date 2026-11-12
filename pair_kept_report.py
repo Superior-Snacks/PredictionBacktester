@@ -1,22 +1,25 @@
 """pair_kept_report.py - audit of the pair-file rows the pairing run KEPT (2026-11-12). Read-only.
 
 Since 2026-11-12 a paired market whose Pinnacle matchup has left the board (an ITF match past its listed start,
-waiting for court time) keeps its pairing instead of being emptied, so the bot keeps asking and the sidecar's
-in-play redirect can serve the live price the moment play starts. Every pairing run logs each kept or released
-row, with what the sidecar held for it, to HardVenArb/pair_kept.jsonl. This report checks that keeping them was
-RIGHT:
+waiting for court time; a moneyline Pinnacle has taken down for a while; a rescheduled match) keeps its pairing
+instead of being emptied, so the bot keeps asking and the sidecar's redirect can serve the replacement's price the
+moment there is one. Every pairing run logs one run record plus each kept or released row, with what the sidecar
+held for it, to HardVenArb/pair_kept.jsonl. This report checks that keeping them was RIGHT:
 
-  EPISODES   each market's run of consecutive kept records: how long it was kept, how far past its listed start,
-             how it ended (re-pointed at the live matchup by a later run / released by the age cap / still kept).
+  RUNS       per pairing run: rows re-checked against the board, re-filled from it, kept, released, named.
+  EPISODES   each market's run of consecutive kept records: how long it was kept, hours from its listed start
+             (negative = still before it), and how it ended - re-pointed at a new matchup / listed again (the same
+             matchup back on the board) / re-paired through its other market / dropped (market closed or cleared)
+             / released by the age cap / still kept.
   PRICED     did the bot get IN-PLAY prices for it while it was kept (the redirect working), from when.
   CORRECT    on those in-play rows, does Pinnacle's P_true track the Kalshi ask for the SAME side? A wrong match
              or a flipped side shows up as P_true tracking 1 - ask, or the two simply disagreeing. Compared with
-             the same numbers for every other in-play row of the period (the baseline).
-  FILLS      every fill on a kept market while it was kept, with its 5-minute cushion and result.
+             the same numbers for every other in-play tennis row of the period (the baseline).
+  FILLS      every fill on a kept market while it was kept, with its result.
 
     python pair_kept_report.py                     # everything logged
     python pair_kept_report.py --since 2026-11-12  # from a date (UTC)
-    python pair_kept_report.py --line              # one summary line (for Discord)
+    python pair_kept_report.py --hours 24 --line   # one summary line (for Discord)
 """
 from __future__ import annotations
 
@@ -32,9 +35,12 @@ import sys
 
 R = os.path.dirname(os.path.abspath(__file__))
 LOG = os.environ.get("PAIR_KEPT_LOG") or os.path.join(R, "HardVenArb", "pair_kept.jsonl")   # env: test copies
+PAIRS = os.environ.get("PAIR_KEPT_PAIRS") or os.path.join(R, "HardVenArb", "cross_pairs.json")
+LEDGER = os.environ.get("PAIR_KEPT_LEDGER") or os.path.join(R, "pair_ledger.jsonl")
 MIN_ROWS = 10           # in-play rows needed before judging a market's agreement
 WRONG_SIDE_MARGIN = 0.10  # 1-P_true beats P_true at matching the ask by this much -> flag
 DISAGREE = 0.15         # mean |P_true - ask| above this -> flag
+LEDGER_LAG = dt.timedelta(minutes=20)   # the ledger step runs after the fill step of the same run
 
 
 def ts(s: str) -> dt.datetime:
@@ -61,14 +67,17 @@ def episodes(recs: list[dict]) -> list[dict]:
     by = collections.OrderedDict()
     for j in sorted(recs, key=lambda r: r.get("at", "")):
         k = (j.get("ticker"), j.get("kept_since") or j.get("at"))
-        e = by.setdefault(k, {"ticker": j.get("ticker"), "token": j.get("token"), "start": j.get("start"),
+        e = by.setdefault(k, {"ticker": j.get("ticker"), "event_id": j.get("event_id"), "token": j.get("token"),
+                              "start": j.get("start"), "kept_since_raw": j.get("kept_since") or j.get("at"),
                               "kept_since": ts(j.get("kept_since") or j.get("at")), "first": ts(j["at"]),
-                              "last": ts(j["at"]), "runs": 0, "max_past": 0.0, "end": "still kept",
-                              "evidence": []})
+                              "last": ts(j["at"]), "runs": 0, "vs_start": None, "end": "still kept",
+                              "kind": "still kept", "evidence": []})
         e["last"] = ts(j["at"])
         e["runs"] += 1
-        e["max_past"] = max(e["max_past"], float(j.get("hours_past_start") or 0))
+        if j.get("hours_past_start") is not None:
+            e["vs_start"] = float(j["hours_past_start"])   # the latest run's (time only moves on)
         if j.get("decision") == "released":
+            e["kind"] = "released"
             e["end"] = "released: " + (j.get("reason") or "")
         if j.get("evidence"):
             e["evidence"].append(j["evidence"])
@@ -79,11 +88,35 @@ def episodes(recs: list[dict]) -> list[dict]:
     return list(by.values())
 
 
-def repointed_at(ticker: str, after: dt.datetime, ledger: dict) -> dt.datetime | None:
-    for at, tok in ledger.get(ticker, []):
-        if at > after:
-            return at
-    return None
+def how_it_ended(e: dict, run_times: list, ledger: dict, pairs_now: dict | None, by_event: dict,
+                 now: dt.datetime) -> None:
+    """Sets e["kind"], e["end"], e["until"]. A kept row is re-checked at every run; the first run after its last
+    record that did NOT keep it is when the keeping ended, and the ledger + the pair file say how."""
+    if e["kind"] == "released":
+        e["until"] = e["last"]
+        return
+    nxt = next((t for t in run_times if t > e["last"]), None)
+    cur = (pairs_now or {}).get(e["ticker"]) or {}
+    if nxt is None:                                  # the latest logged run kept it
+        e["until"] = now
+        if pairs_now is None or (cur.get("hardven_kept_since") or "")[:19] == (e["kept_since_raw"] or "")[:19]:
+            e["kind"], e["end"] = "still kept", "still kept"
+        else:                                        # a run is mid-way, or the file was edited by hand
+            e["kind"], e["end"] = "no longer kept", "no longer kept"
+        return
+    e["until"] = nxt
+    moved = any(e["last"] < at <= nxt + LEDGER_LAG and tok != e["token"] for at, tok in ledger.get(e["ticker"], []))
+    sib = [r for r in by_event.get(e.get("event_id") or "", ()) if r.get("kalshi_ticker") != e["ticker"]
+           and r.get("hardven_yes_token")]
+    if moved:
+        kind = "re-pointed"                          # a new matchup (the live replacement, a re-listing)
+    elif cur.get("hardven_yes_token"):
+        kind = "listed again"                        # the same matchup back on the board
+    elif sib:
+        kind = "other market"                        # its event re-paired through the sibling market
+    else:
+        kind = "dropped"                             # Kalshi closed the market, or a check cleared it
+    e["kind"], e["end"] = kind, f"{kind} {nxt:%H:%M}"
 
 
 def main() -> None:
@@ -107,14 +140,19 @@ def main() -> None:
         scope = f" since {a.since}" if a.since else ""
 
     recs = load_log(since)
-    if not recs:
-        print(f"kept pairs{scope}: none")
+    runs = [j for j in recs if "run" in j]
+    rowrecs = [j for j in recs if "run" not in j]
+    if not rowrecs:
+        n = len(runs)
+        print(f"kept pairs{scope}: none kept" + (f" ({n} pairing run(s) logged, every paired row found on the board)"
+                                                 if n else ""))
         return
-    eps = episodes(recs)
+    eps = episodes(rowrecs)
     now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+    run_times = sorted({ts(j["at"]) for j in load_log(None)})      # every run ever: an episode may end after --since
 
     ledger = collections.defaultdict(list)
-    for line in open(os.path.join(R, "pair_ledger.jsonl"), encoding="utf-8"):
+    for line in open(LEDGER, encoding="utf-8"):
         try:
             j = json.loads(line)
         except ValueError:
@@ -122,13 +160,18 @@ def main() -> None:
         ledger[j.get("ticker")].append((dt.datetime.fromtimestamp(j["at"], dt.timezone.utc).replace(tzinfo=None), j.get("yes_token")))
     for v in ledger.values():
         v.sort()
+    try:
+        cur_rows = json.load(open(PAIRS, encoding="utf-8"))
+        pairs_now = {r.get("kalshi_ticker"): r for r in cur_rows}
+        by_event = collections.defaultdict(list)
+        for r in cur_rows:
+            by_event[r.get("event_id") or ""].append(r)
+    except Exception:
+        pairs_now, by_event = None, {}
     for e in eps:
-        e["repointed"] = repointed_at(e["ticker"], e["kept_since"], ledger)
-        if e["repointed"] and e["end"] == "still kept":
-            e["end"] = f"re-pointed {e['repointed']:%m-%d %H:%M}"
-        e["until"] = e["repointed"] or (e["last"] if e["end"].startswith("released") else now)
+        how_it_ended(e, run_times, ledger, pairs_now, by_event, now)
 
-    # ── the bot's rows for kept markets while kept, and the baseline ──
+    # ── the bot's rows for kept markets while kept (tennis + the shadow sports), and the tennis baseline ──
     want = collections.defaultdict(list)
     for e in eps:
         want[e["ticker"]].append(e)
@@ -137,15 +180,22 @@ def main() -> None:
     base = []
     d = lo.date()
     while d <= now.date():
-        fn = os.path.join(R, f"EvTelemetry_{d:%Y%m%d}.csv")
-        if os.path.exists(fn):
+        for prefix in ("EvTelemetry", "EvShadowTelemetry"):
+            fn = os.path.join(R, f"{prefix}_{d:%Y%m%d}.csv")
+            if not os.path.exists(fn):
+                continue
             with open(fn, newline="", encoding="utf-8") as fh:
                 r = csv.reader(fh)
-                h = next(r)
+                h = next(r, None)
+                if not h:
+                    continue
                 ix = {k: i for i, k in enumerate(h)}
                 for x in r:
                     if len(x) < len(h) or x[ix["InPlay"]] != "1":
                         continue
+                    tk = x[ix["Ticker"]]
+                    if prefix != "EvTelemetry" and tk not in want:
+                        continue                    # shadow rows only matter for a kept market
                     try:
                         p, ask = float(x[ix["PTrueUsed"]]), float(x[ix["KalshiWsAsk"]])
                     except ValueError:
@@ -156,13 +206,13 @@ def main() -> None:
                     if t < lo:
                         continue
                     hit = None
-                    for e in want.get(x[ix["Ticker"]], ()):
+                    for e in want.get(tk, ()):
                         if e["kept_since"] <= t <= e["until"]:
                             hit = e
                     row = (t, x[ix["Side"]], p, ask, x[ix["Decision"]])
                     if hit is not None:
                         rows[id(hit)].append(row)
-                    elif "MATCH" in x[ix["Ticker"]]:
+                    elif prefix == "EvTelemetry" and "MATCH" in tk:
                         base.append(row)
         d += dt.timedelta(days=1)
 
@@ -184,10 +234,10 @@ def main() -> None:
                 flags.append((e, f"POSSIBLE WRONG SIDE/MATCH: 1-P_true matches the ask better ({inv:.3f} vs {same:.3f})"))
             elif same > DISAGREE:
                 flags.append((e, f"PRICES DISAGREE: mean |P_true - ask| {same:.3f} > {DISAGREE}"))
-        if e["max_past"] > 12:
-            flags.append((e, f"kept {e['max_past']:.1f}h past its listed start"))
-        if e.get("names_from") == "none" and e["end"] == "still kept":
-            flags.append((e, "KEPT WITHOUT NAMES at the latest run - the in-play redirect cannot follow it"))
+        if (e["vs_start"] or 0) > 12:
+            flags.append((e, f"kept {e['vs_start']:.1f}h past its listed start"))
+        if e.get("names_from") == "none" and e["kind"] == "still kept":
+            flags.append((e, "KEPT WITHOUT NAMES at the latest run - the redirect cannot follow it"))
         if e.get("cleared_by_check"):
             flags.append((e, "a later check of a pairing run (price gate / orientation / mirror) cleared it"))
 
@@ -222,30 +272,39 @@ def main() -> None:
             settled[j.get("ticker")] = j.get("result")
 
     live_eps = [e for e in eps if e["n"]]
-    released = [e for e in eps if e["end"].startswith("released")]
-    repointed = [e for e in eps if e["repointed"]]
+    kinds = collections.Counter(e["kind"] for e in eps)
+    order = ("still kept", "re-pointed", "listed again", "other market", "dropped", "released", "no longer kept")
+    ends = ", ".join(f"{kinds[k]} {k if k != 'released' else 'released by the age cap'}" for k in order
+                     if kinds[k] or k in ("still kept", "released"))
     if a.line:
         warn = "⚠ " if flags else ""
-        print(f"{warn}kept pairs{scope}: {len(eps)} market(s) kept, "
-              f"{len(live_eps)} priced in-play while kept ({sum(e['n'] for e in eps)} rows), {len(repointed)} re-pointed "
-              f"later, {len(released)} released by the age cap, {len(fills)} fill(s); "
+        print(f"{warn}kept pairs{scope}: {len(eps)} market(s) kept - {ends}; {len(live_eps)} priced in-play while "
+              f"kept ({sum(e['n'] for e in eps)} rows), {len(fills)} fill(s); "
               + (f"{len(flags)} FLAGGED" if flags else "all checks pass"))
         return
 
-    print(f"KEPT PAIRS AUDIT  {len(recs)} log records, {len(eps)} episode(s), from {lo:%m-%d %H:%M} UTC")
-    print(f"   priced in-play while kept: {len(live_eps)} market(s), {sum(e['n'] for e in eps)} rows | re-pointed by a "
-          f"later run: {len(repointed)} | released by the age cap: {len(released)} | fills while kept: {len(fills)}")
+    print(f"KEPT PAIRS AUDIT  {len(rowrecs)} row record(s), {len(eps)} episode(s), from {lo:%m-%d %H:%M} UTC")
+    print(f"   ended: {ends}")
+    print(f"   priced in-play while kept: {len(live_eps)} market(s), {sum(e['n'] for e in eps)} rows | fills while kept: "
+          f"{len(fills)}")
     bf = fit(base)
     if bf:
         print(f"   baseline (every other in-play tennis row, same period, n={len(base)}): mean |P_true - ask| "
               f"{bf[0]:.3f}, |(1-P_true) - ask| {bf[1]:.3f}")
-    print("\n   market                              kept since    past start  runs  end                       in-play rows (from)   |P-ask|  |(1-P)-ask|")
+    if runs:
+        print("\n   RUNS (latest 10)   re-checked = paired rows held against the board")
+        for j in runs[-10:]:
+            r = j["run"]
+            print(f"      {ts(j['at']):%m-%d %H:%M}  re-checked {r.get('held', 0):4d}: re-filled {r.get('refilled', 0):4d}, "
+                  f"kept {r.get('kept', 0):3d}, released {r.get('released', 0)}, cleared later {r.get('cleared_later', 0)}, "
+                  f"named from the sidecar {r.get('named', 0)}")
+    print("\n   vs start = hours from the listed start at the latest run (negative = still before it)")
+    print("   market                              kept since    vs start  runs  end                       in-play rows (from)   |P-ask|  |(1-P)-ask|")
     for e in sorted(eps, key=lambda e: e["kept_since"]):
         f = e["fit"]
-        print(f"   {e['ticker'][-34:]:34}  {e['kept_since']:%m-%d %H:%M}   {e['max_past']:5.1f}h    {e['runs']:3d}   {e['end'][:24]:24}  "
-              f"{e['n']:5d} ({e['first_live']:%H:%M})" if e["first_live"] else
-              f"   {e['ticker'][-34:]:34}  {e['kept_since']:%m-%d %H:%M}   {e['max_past']:5.1f}h    {e['runs']:3d}   {e['end'][:24]:24}      0        ",
-              end="")
+        vs = f"{e['vs_start']:+6.1f}h" if e["vs_start"] is not None else "     ? "
+        head = f"   {e['ticker'][-34:]:34}  {e['kept_since']:%m-%d %H:%M}   {vs}  {e['runs']:3d}   {e['end'][:24]:24}  "
+        print(head + (f"{e['n']:5d} ({e['first_live']:%H:%M})" if e["first_live"] else "    0        "), end="")
         print(f"    {f[0]:.3f}    {f[1]:.3f}" if f else "")
     if fills:
         print("\n   FILLS while kept:")
@@ -257,11 +316,16 @@ def main() -> None:
     print("\n   CHECKS: " + ("all pass" if not flags else f"{len(flags)} FLAGGED"))
     for e, why in flags:
         print(f"      ⚠ {e['ticker']}: {why}")
-    last_ev = [ev for e in eps for ev in e["evidence"][-1:]]
-    if last_ev:
-        linked = sum(1 for ev in last_ev if ev.get("live_child"))
-        print(f"\n   sidecar at the latest run: {linked} of {len(last_ev)} kept market(s) had their live replacement "
-              f"linked, {sum(1 for ev in last_ev if ev.get('target_live'))} being served live")
+    if run_times:
+        latest = run_times[-1]
+        at_latest = [j for j in rowrecs if ts(j["at"]) == latest and j.get("decision") == "kept"]
+        if at_latest:
+            evs = [j.get("evidence") or {} for j in at_latest]
+            print(f"\n   sidecar at the latest run ({latest:%m-%d %H:%M}): {sum(1 for ev in evs if ev.get('live_child'))} of "
+                  f"{len(evs)} kept market(s) had a replacement linked, {sum(1 for ev in evs if ev.get('redirect'))} "
+                  f"redirected, {sum(1 for ev in evs if ev.get('target_live'))} being served live")
+        else:
+            print(f"\n   the latest run ({latest:%m-%d %H:%M}) kept nothing")
 
 
 if __name__ == "__main__":

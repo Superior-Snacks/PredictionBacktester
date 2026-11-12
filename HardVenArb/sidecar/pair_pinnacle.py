@@ -799,9 +799,19 @@ def main() -> None:
         print("\n[PAIR] dry-run (no file written). Re-run with --write to save.")
     elif kept_note:
         print(f"\n[PAIR] nothing changed, file not rewritten{kept_note}")
-    if args.write and kept_log:
+    if args.write:
+        # ONE RUN RECORD EVERY RUN, kept rows or not (2026-11-12). The report tells a row that is still kept from
+        # one a later run found on the board again by whether that later run logged it - and a run that kept
+        # nothing used to leave no trace, so a row listed again (same matchup: no ledger entry either) read
+        # "still kept" forever. `refilled` = held rows the board re-filled (or a sibling market re-paired).
+        run_rec = {"at": now_iso, "run": {
+            "held": retired, "refilled": retired - kept - released,
+            "kept": sum(1 for r, _ in kept_log if r.get("final") == "kept"),
+            "cleared_later": sum(1 for r, _ in kept_log if str(r.get("final") or "").startswith("cleared")),
+            "released": released, "named": named}}
         try:                                   # best-effort: an audit log must never cost a pairing run
             with open(Path(args.pairs).with_name("pair_kept.jsonl"), "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(run_rec) + "\n")
                 for rec, _e in kept_log:
                     fh.write(json.dumps(rec) + "\n")
         except Exception as ex:

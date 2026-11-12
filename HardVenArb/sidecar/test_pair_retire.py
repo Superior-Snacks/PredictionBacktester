@@ -86,9 +86,18 @@ def row(rows, ticker):
     return next(r for r in rows if r["kalshi_ticker"] == ticker)
 
 
-def kept_log(path):
+def _log_lines(path):
     p = Path(path).with_name("pair_kept.jsonl")
     return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines()] if p.exists() else []
+
+
+def kept_log(path):
+    """The row records (kept / released) - the per-run records are run_log's."""
+    return [j for j in _log_lines(path) if "run" not in j]
+
+
+def run_log(path):
+    return [j["run"] for j in _log_lines(path) if "run" in j]
 
 
 print("[1] the match is past its listed start: P off the board, no replacement yet -> the row KEEPS P")
@@ -110,6 +119,11 @@ check("record: kept, final kept, the token, the evidence",
       L and L[0]["decision"] == "kept" and L[0]["final"] == "kept" and L[0]["token"] == ABI["hardven_yes_token"]
       and L[0]["evidence"] == {"stub": True, "redirect": ABI["hardven_yes_token"]}, L[:1])
 check("record: hours past the listed start", L and 1.9 < L[0]["hours_past_start"] < 2.1, L[:1])
+RL = run_log(path)
+check("one run record: held 1, kept 1", RL == [{"held": 1, "refilled": 0, "kept": 1, "cleared_later": 0,
+                                               "released": 0, "named": 0}], RL)
+check("the run record shares the rows' timestamp, and comes first",
+      _log_lines(path)[0].get("run") is not None and _log_lines(path)[0]["at"] == L[0]["at"], _log_lines(path)[:2])
 
 print("\n[1b] the next run, still not listed -> kept again, the SAME kept_since, nothing rewritten")
 out, log, wrote, path = run(None, OTHER, path=path)
@@ -119,6 +133,7 @@ check("kept_since unchanged", a.get("hardven_kept_since") == since, a.get("hardv
 check("file not rewritten", not wrote)
 check("last line still reports it", "nothing changed, file not rewritten | kept 1 unlisted row(s)" in log, log.strip().splitlines()[-1])
 check("second audit record", len(kept_log(path)) == 2)
+check("second run record", len(run_log(path)) == 2 and run_log(path)[1]["kept"] == 1, run_log(path))
 
 print("\n[2] the live replacement is on the board -> RE-POINTED at it, and the kept_since goes")
 prev = dict(copy.deepcopy(ABI), hardven_kept_since=since)
@@ -130,6 +145,9 @@ check("kept_since cleared", "hardven_kept_since" not in a, a.get("hardven_kept_s
 check("the mirror market stays unpaired", not row(out, GAV["kalshi_ticker"]).get("hardven_yes_token"))
 check("summary", "1 re-filled from it, 0 not listed" in log, log[-500:])
 check("no audit record (nothing kept)", not kept_log(path))
+check("but a run record: the held row was re-filled", run_log(path) == [{"held": 1, "refilled": 1, "kept": 0,
+                                                                         "cleared_later": 0, "released": 0,
+                                                                         "named": 0}], run_log(path))
 
 print("\n[3] the event re-pairs through its OTHER market -> the old row stays clear (no two matchups per event)")
 out, log, wrote, path = run([copy.deepcopy(GAV), copy.deepcopy(ABI)], OTHER + LIVE)
@@ -168,6 +186,8 @@ check("cleared", not a.get("hardven_yes_token") and "hardven_yes_name" not in a 
 check("summary", "1 released by the 12h age cap" in log, log[-500:])
 L = kept_log(path)
 check("audit record: released with the reason", L and L[0]["decision"] == "released" and "past its listed start" in L[0]["reason"], L)
+check("run record counts the release", run_log(path) == [{"held": 1, "refilled": 0, "kept": 0, "cleared_later": 0,
+                                                           "released": 1, "named": 0}], run_log(path))
 
 print("\n[8] the cap is HARDVEN_PAIR_KEEP_MAX_H")
 os.environ["HARDVEN_PAIR_KEEP_MAX_H"] = "20"
@@ -194,6 +214,8 @@ out, log, wrote, path = run([copy.deepcopy(ABI)], OTHER, gate=blank_abi)
 L = kept_log(path)
 check("final says cleared later", L and L[0]["final"].startswith("cleared later"), L)
 check("last line counts it out", "kept 0 unlisted row(s)" in log.strip().splitlines()[-1], log.strip().splitlines()[-1])
+check("run record: kept 0, cleared_later 1", run_log(path) and run_log(path)[0]["kept"] == 0
+      and run_log(path)[0]["cleared_later"] == 1, run_log(path))
 
 print("\n[11] the evidence call against a sidecar that is not there")
 probe = {"ok": True}
@@ -215,6 +237,7 @@ try:
           (P._norm(a.get("hardven_yes_name") or ""), P._norm(a.get("hardven_no_name") or "")) ==
           (P._norm("Mohamed Ali Abibsi"), P._norm("Liam Gavrielides")), (a.get("hardven_yes_name"), a.get("hardven_no_name")))
     check("logged names_from=sidecar", kept_log(path)[0].get("names_from") == "sidecar", kept_log(path))
+    check("run record: named 1", run_log(path) and run_log(path)[0]["named"] == 1, run_log(path))
     check("file rewritten", wrote)
 
     P._sidecar_evidence = lambda s, sid, probe, timeout=3.0: {
