@@ -261,8 +261,15 @@ def main() -> None:
 
     # MERGE (default): carry over already-filled Pinnacle tokens for tickers that are STILL open, so an intraday
     # re-pair (which rebuilds this scaffold from scratch) can't drop a working live pairing whose moneyline is
-    # momentarily suspended on Pinnacle's board at catalog time. --fresh forces the old blank rebuild. Only the
-    # two hardven_* tokens + the three_way/fuzzy tags are carried; all Kalshi fields stay FRESH from this fetch.
+    # momentarily suspended on Pinnacle's board at catalog time. --fresh forces the old blank rebuild. The two
+    # hardven_* tokens and what describes THEM are carried (tags, league URL, start, the resolved Pinnacle names,
+    # when the pairing run began KEEPING the row); all Kalshi fields stay FRESH from this fetch.
+    #
+    # THE NAMES WERE NOT CARRIED UNTIL 2026-11-12, and it mattered twice. The sidecar's in-play redirect resolves
+    # the side by the name the pair file records, and refuses a row without one. (1) Between this write and the
+    # moneyline fill's (~1 min) every row was nameless, so a sidecar name-cache reload in that gap blinded every
+    # redirect for up to 5 min. (2) A row the fill KEEPS on its old matchup is not re-filled, so it stayed
+    # nameless for good - kept, polled, and never followed in-play (seen on the first run that kept rows).
     carried = 0
     # MERGE MUST READ THE FILE IT IS ABOUT TO WRITE. Reading the hardcoded OUT while writing --out
     # would carry the OTHER venue's tokens into this file — Pinnacle tennis ids landing in the
@@ -277,7 +284,10 @@ def main() -> None:
             if p and p.get("hardven_yes_token") and p.get("hardven_no_token"):
                 e["hardven_yes_token"] = p["hardven_yes_token"]
                 e["hardven_no_token"] = p["hardven_no_token"]
-                for flag in ("three_way", "fuzzy", "oddspapi", "hardven_league_url", "hardven_start_time"):
+                # NOT hardven_legs / price_unvalidated: the fill re-derives both for every row it re-fills, and a
+                # carried leg set would outlive a 3-way row re-pointed at a matchup without a draw leg.
+                for flag in ("three_way", "fuzzy", "oddspapi", "hardven_league_url", "hardven_start_time",
+                             "hardven_yes_name", "hardven_no_name", "hardven_kept_since"):
                     if p.get(flag):
                         e[flag] = p[flag]
                 carried += 1

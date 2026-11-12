@@ -303,6 +303,48 @@ def _pick_game(games: list, entry: dict, time_tol_sec: float):
     return min(cands, key=_ddiff)
 
 
+def _sidecar_evidence(sidecar: str, sid: str, probe: dict, timeout: float = 3.0) -> dict:
+    """What the running sidecar holds for a KEPT token right now (GET /debug/redirect, read-only): the old matchup
+    as cached, its live replacement if linked, and where the in-play redirect would send the bot. {} when not
+    asked, {"error": ...} when the call failed - after one failure the rest of the run does not try again."""
+    if not sid or not probe.get("ok"):
+        return {}
+    try:
+        import urllib.parse
+        import urllib.request
+        url = f"{sidecar.rstrip('/')}/debug/redirect?sid={urllib.parse.quote(sid, safe=':')}"
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            j = json.loads(r.read().decode("utf-8"))
+    except Exception as ex:
+        probe["ok"] = False
+        return {"error": type(ex).__name__}
+    par, link, tgt = j.get("parent") or {}, j.get("parentid_link") or {}, j.get("redirect_target") or {}
+    return {"parent_cached": bool(par), "parent_status": par.get("status"),
+            "parent_cutoff_in_s": par.get("cutoff_in_s"),
+            "parent_last_push_s": (j.get("parent_meta") or {}).get("last_push_s"),
+            "parent_names": (j.get("parent_meta") or {}).get("names"),
+            "live_child": link.get("child"), "child_is_replacement": link.get("is_replacement"),
+            "child_last_push_s": (link.get("child_meta") or {}).get("last_push_s"),
+            "redirect": j.get("redirect"), "target_live": tgt.get("live") if tgt else None,
+            "target_status": tgt.get("status") if tgt else None}
+
+
+def _names_from_evidence(e: dict, evd: dict):
+    """(yes_name, no_name) for a kept row that has lost its names, from the SIDECAR's own record of the matchup
+    (its participants, keyed home/away like the tokens). None unless both sides resolve, differ, and the YES side
+    shares a name token with the Kalshi outcome - a row is never named on a guess (the redirect would then follow
+    the wrong player)."""
+    names = (evd or {}).get("parent_names") or {}
+    yn = names.get(_designation(e.get("hardven_yes_token") or ""))
+    nn = names.get(_designation(e.get("hardven_no_token") or ""))
+    if not (yn and nn) or yn == nn:
+        return None
+    toks = lambda x: {w for w in re.sub(r"[^a-z ]", " ", (x or "").lower()).split() if len(w) >= 3}
+    if not (toks(e.get("kalshi_outcome") or e.get("outcome") or "") & toks(yn)):
+        return None
+    return _book_name(yn), _book_name(nn)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sidecar", default=os.environ.get("HARDVEN_SIDECAR_URL", "http://127.0.0.1:8787"))
@@ -423,21 +465,38 @@ def main() -> None:
     #
     # This is the file-level twin of the runtime redirect (adapter `_redirect_sid`). Both exist on purpose —
     # the redirect keeps a stale row TRADEABLE within a session, this stops it being stale tomorrow.
-    _cat_mids = {str(c.selection_id).rsplit(":", 1)[0] for c in cat
-                 if str(getattr(c, "selection_id", "")).count(":") >= 2}
+    #
+    # WHAT THIS ACTUALLY DOES, AND THE 2026-11-12 FIX. The board test it was written with never matched:
+    # /catalog selections are DICTS and it read them as attributes (`getattr(c, "selection_id", "")` is "" for
+    # a dict), so EVERY paired row has been cleared and re-filled on EVERY run. Rows still on the board came
+    # back unchanged, which hid it - and that churn is load-bearing now: the 2-way mirror dedupe and the mirror
+    # assertion in the loop below only see rows filled in THIS run, so leaving listed rows alone (tried and
+    # tested 2026-11-12) pairs the other market of every event as well. So every paired row is still handed
+    # back to the matcher each run. What changed is the other half:
+    #
+    # A ROW THE MATCHER CANNOT RE-FILL USED TO STAY EMPTY. An ITF match past its LISTED start has no pre-match
+    # price, so it is off the board, while its live replacement is only issued when play actually begins -
+    # often 1-3 hours later ("followed by"). The emptied row left the pair file, the EV bot stopped asking for
+    # it, and the sidecar's in-play redirect, which serves the live price from the replacement's first push,
+    # never got asked. Measured 2026-11-11: 13 of 47 testable matches waited 22-93 min for the next run;
+    # replaying that night's feed through the adapter, the redirect alone priced those 13 on 97% of checks.
+    # A whole league missing from one catalog walk emptied its rows the same way, hours before their start.
+    #
+    # Now such a row gets its old tokens and names back after the loop - unless its event re-paired through a
+    # sibling row this run, or hit a mirror conflict (then it stays clear, as before). The old matchup serves
+    # suspended until play starts, then the redirect hands the bot the live price; the first run that finds
+    # the replacement on the board re-points the row exactly as before.
+    _pairing_keys = ("hardven_yes_token", "hardven_no_token", "hardven_yes_name", "hardven_no_name",
+                     "hardven_kept_since")   # the last: when keeping began; gone once a run re-fills or releases
     retired = 0
+    held: list[tuple[dict, dict]] = []     # (row, the pairing taken from it) - restored if nothing re-fills it
     for e in pairs:
-        _yt = e.get("hardven_yes_token") or ""
-        if _yt.count(":") != 2:
+        if (e.get("hardven_yes_token") or "").count(":") != 2:
             continue
-        if ":".join(_yt.split(":")[:2]) in _cat_mids:
-            continue                       # still on the board -> leave it alone
-        for _k in ("hardven_yes_token", "hardven_no_token", "hardven_yes_name", "hardven_no_name"):
+        held.append((e, {_k: e[_k] for _k in _pairing_keys if _k in e}))
+        for _k in _pairing_keys:
             e.pop(_k, None)
         retired += 1
-    if retired:
-        print(f"[PAIR] {retired} row(s) pointed at a matchup that has left the board — cleared so they "
-              f"re-pair against the current one.")
 
     backfilled = 0
     for e in pairs:
@@ -578,6 +637,71 @@ def main() -> None:
     for u in unmatched:
         print(f"   UNMATCHED: {u}")
 
+    # ── ROWS THE MATCHER COULD NOT RE-FILL KEEP THEIR PAIRING (see RE-POINT above) - RE-CHECKED EVERY RUN ──
+    # A kept row is a promise that the match is still coming, so every run has to justify it again:
+    #   AGE CAP     past HARDVEN_PAIR_KEEP_MAX_H hours (default 12) after its listed start no ITF/Challenger match
+    #               is still waiting for court time: the row is RELEASED (cleared - the pre-11-12 behaviour) as
+    #               postponed or cancelled. No listed start: counted from when the keeping began.
+    #   EVIDENCE    what the running sidecar holds for the token (/debug/redirect, read-only): the old matchup as
+    #               cached, its live replacement if linked, where the redirect sends the bot and whether that is
+    #               live. Recorded, so pair_kept_report.py can show a kept row was served the right match.
+    #   PRICE GATE  (below, unchanged) once the redirect serves a live price, every run compares it with Kalshi's
+    #               and blanks a wrong game / swaps an inverted side - kept rows included. A kept row that a later
+    #               check of this run clears is logged as such ("final").
+    # Every kept or released row goes to pair_kept.jsonl beside the pair file (written with --write only);
+    # `hardven_kept_since` on the row says when the keeping began.
+    try:
+        keep_max_h = float(os.environ.get("HARDVEN_PAIR_KEEP_MAX_H", "12") or 12)
+    except ValueError:
+        keep_max_h = 12.0
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    now_iso = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    kept = released = stamped = named = 0
+    kept_log: list[tuple[dict, dict]] = []            # (log record, row)
+    probe = {"ok": True}                              # one failed sidecar call stops the rest (no N x timeout)
+    for e, saved in held:
+        if e.get("hardven_yes_token") and e.get("hardven_no_token"):
+            continue                                  # re-filled against the current board
+        ev = e.get("event_id") or ""
+        if ev and (ev in done_events or ev in mirror_conflicts):
+            continue                                  # its event re-paired through a sibling row, or conflicted
+        since = saved.get("hardven_kept_since") or now_iso
+        anchor = _pin_dt(e.get("hardven_start_time") or "") or _pin_dt(since)
+        past_h = (now_utc - anchor).total_seconds() / 3600 if anchor else 0.0
+        rec = {"at": now_iso, "ticker": e.get("kalshi_ticker"), "event_id": ev,
+               "token": saved.get("hardven_yes_token"), "start": e.get("hardven_start_time"),
+               "kept_since": since, "hours_past_start": round(past_h, 2)}
+        if past_h > keep_max_h:
+            released += 1
+            rec.update(decision="released", reason=f"{past_h:.1f}h past its listed start (cap {keep_max_h:g}h)")
+        else:
+            e.update(saved)
+            if not saved.get("hardven_kept_since"):
+                e["hardven_kept_since"] = since
+                stamped += 1
+            kept += 1
+            evd = _sidecar_evidence(args.sidecar, rec["token"] or "", probe)
+            # NAMES ARE WHAT LETS THE REDIRECT FOLLOW IT. The redirect resolves the side by the name this file
+            # records and refuses a row without one, so a nameless kept row is polled but never priced in-play.
+            # The scaffold carries names since 11-12; a row that lost them before that (or ever does) is named
+            # from the sidecar's record of its matchup, never on a guess - and logged either way.
+            if e.get("hardven_yes_name") and e.get("hardven_no_name"):
+                rec["names_from"] = "file"
+            elif (nm := _names_from_evidence(e, evd)):
+                e["hardven_yes_name"], e["hardven_no_name"] = nm
+                rec["names_from"] = "sidecar"
+                named += 1
+            else:
+                rec["names_from"] = "none"            # flagged by pair_kept_report.py: the redirect cannot follow it
+            rec.update(decision="kept", evidence=evd)
+        kept_log.append((rec, e))
+    repointed = retired - kept                        # rows whose pairing changed this run (re-filled or cleared)
+    if retired:
+        print(f"[PAIR] re-checked {retired} paired row(s) against the board: {retired - kept - released} re-filled "
+              f"from it, {kept} not listed right now and KEPT on their matchup until a replacement is listed (the "
+              f"in-play redirect serves the live price meanwhile), {released} released by the {keep_max_h:g}h "
+              f"age cap.")
+
     # ── price-consistency gate: reject wrong-game pairs + fix inverted sides by live prices ──
     gate = (0, 0, 0, 0)
     if not args.no_price_gate:
@@ -660,11 +784,28 @@ def main() -> None:
             print(f"         {ev}")
 
     valid = sum(1 for e in pairs if e.get("hardven_yes_token") and e.get("hardven_no_token"))
-    if args.write and (filled or gate[1] or gate[2] or url_n or start_n or backfilled or retired):
+    # The kept rows' final state, after every check of this run (a price-gate or mirror clear shows up here).
+    for rec, e in kept_log:
+        if rec["decision"] == "kept":
+            rec["final"] = ("kept" if e.get("hardven_yes_token") == rec["token"]
+                            else "cleared later in this run (price gate / orientation / mirror check)")
+    kept_note = (f" | kept {sum(1 for r, _ in kept_log if r.get('final') == 'kept')} unlisted row(s), released "
+                 f"{released} (pair_kept.jsonl)" if kept_log else "")
+    if args.write and (filled or gate[1] or gate[2] or url_n or start_n or backfilled or repointed or stamped
+                       or named):
         atomic_write_json(args.pairs, pairs)   # atomic → the C# hot-reload never reads a partial cross_pairs.json
-        print(f"\n[PAIR] wrote {valid} filled pair(s) → {args.pairs}")
+        print(f"\n[PAIR] wrote {valid} filled pair(s) → {args.pairs}{kept_note}")
     elif not args.write:
         print("\n[PAIR] dry-run (no file written). Re-run with --write to save.")
+    elif kept_note:
+        print(f"\n[PAIR] nothing changed, file not rewritten{kept_note}")
+    if args.write and kept_log:
+        try:                                   # best-effort: an audit log must never cost a pairing run
+            with open(Path(args.pairs).with_name("pair_kept.jsonl"), "a", encoding="utf-8") as fh:
+                for rec, _e in kept_log:
+                    fh.write(json.dumps(rec) + "\n")
+        except Exception as ex:
+            print(f"[PAIR] kept-row log skipped ({type(ex).__name__}: {ex})")
 
 
 if __name__ == "__main__":

@@ -143,6 +143,7 @@ SCRIPTS = {
     "clv":         ("clv_prematch.py",    [],                     "pre-match CLV vs Pinnacle's close"),
     "settlements": ("check_settlements.py", ["--fills", "--flagged", "--brief"], "settlement flags on our fills (walkovers, retirements, abrupt ends)"),
     "forward":     ("ev_forward_test.py", [],                     "pre-registered tennis give-back forward test (rules fixed 2026-10-27)"),
+    "kept":        ("pair_kept_report.py", ["--hours", "48"],     "audit of paired markets kept while their match waits for court time"),
 }
 
 
@@ -163,6 +164,22 @@ def forward_line(root: str, today: "dt.date | None" = None) -> str:
         return f"🧪 forward test: could not run ({type(e).__name__})"
     s = (p.stdout or b"").decode("utf-8", "replace").strip().splitlines()
     return ("🧪 " + s[-1]) if s else ""
+
+
+def kept_line(root: str) -> str:
+    """KEPT PAIRS, ONE LINE WITH THE END-OF-DAY DROP (2026-11-12). The pairing run now keeps a paired market whose
+    match is waiting for court time instead of emptying it; pair_kept_report.py audits those rows. Last 24h: kept,
+    priced in-play while kept, re-pointed, released by the age cap, fills - and a warning when a kept market's
+    served price disagreed with Kalshi's. Never raises: a failed audit is one line, not a missing post."""
+    path = os.path.join(root, "pair_kept_report.py")
+    if not os.path.exists(path):
+        return ""
+    try:
+        p = subprocess.run([sys.executable, path, "--hours", "24", "--line"], cwd=root, capture_output=True, timeout=600)
+    except Exception as e:
+        return f"📌 kept pairs: could not run ({type(e).__name__})"
+    s = (p.stdout or b"").decode("utf-8", "replace").strip().splitlines()
+    return ("📌 " + s[-1]) if s else ""
 
 
 REMINDERS_FILE = "ev_reminders.json"
@@ -647,10 +664,13 @@ def main() -> int:
     if a.full:
         fl = fills_line(a.root)
         fwd = forward_line(a.root)
+        kept = kept_line(a.root)
         due = reminders_due(a.root)
         print(fl)
         if fwd:
             print(fwd)
+        if kept:
+            print(kept)
         for r in due:
             print(r)
         if a.dry:
@@ -667,6 +687,8 @@ def main() -> int:
         ok = post(url, fl) and ok
         if fwd:
             ok = post(url, fwd) and ok
+        if kept:
+            ok = post(url, kept) and ok
         for r in due:
             ok = post(url, r) and ok
         print("[DISCORD] posted." if ok else "[DISCORD] post FAILED.")
