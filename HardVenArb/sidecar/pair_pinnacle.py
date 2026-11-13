@@ -645,10 +645,18 @@ def main() -> None:
     #   EVIDENCE    what the running sidecar holds for the token (/debug/redirect, read-only): the old matchup as
     #               cached, its live replacement if linked, where the redirect sends the bot and whether that is
     #               live. Recorded, so pair_kept_report.py can show a kept row was served the right match.
-    #   PRICE GATE  (below, unchanged) once the redirect serves a live price, every run compares it with Kalshi's
-    #               and blanks a wrong game / swaps an inverted side - kept rows included. A kept row that a later
-    #               check of this run clears is logged as such ("final").
-    # Every kept or released row goes to pair_kept.jsonl beside the pair file (written with --write only);
+    #   NOT THE PRICE GATE (2026-11-13). Kept rows are left out of it. Pairing runs every 90 min round the clock,
+    #               the session only inside its windows, so a run in a break reads a price FROZEN at the window's
+    #               close and compares it with Kalshi's live one. In the first 24h all 6 kept rows it cleared were
+    #               in-play games read that way (prices 35 min to 2h old), and two of them were still being played
+    #               when the session came back - 35-40 min of in-play pricing lost each. The side a kept row holds
+    #               was settled by the board's names when it was last paired, and the redirect resolves it by name;
+    #               pair_kept_report.py compares every in-play price it was served with Kalshi's ask. A kept row
+    #               the name audit below still clears (its matchup listed again under other names) is logged as
+    #               such ("final").
+    # Every kept or released row goes to pair_kept.jsonl beside the pair file (written with --write only), and so
+    # does how a row kept until now ENDED this run (re-filled from the board / its other market / a conflict) -
+    # a row that was kept and has no record at the next run left the pair file: Kalshi closed the market.
     # `hardven_kept_since` on the row says when the keeping began.
     try:
         keep_max_h = float(os.environ.get("HARDVEN_PAIR_KEEP_MAX_H", "12") or 12)
@@ -659,11 +667,26 @@ def main() -> None:
     kept = released = stamped = named = 0
     kept_log: list[tuple[dict, dict]] = []            # (log record, row)
     probe = {"ok": True}                              # one failed sidecar call stops the rest (no N x timeout)
+
+    def _ended(e: dict, saved: dict, how: str) -> dict:
+        """The record of a row that was kept until this run and is not any more - and how that ended."""
+        return {"at": now_iso, "ticker": e.get("kalshi_ticker"), "event_id": e.get("event_id") or "",
+                "token": saved.get("hardven_yes_token"), "kept_since": saved.get("hardven_kept_since"),
+                "decision": "ended", "how": how, "new_token": e.get("hardven_yes_token") or None}
+
     for e, saved in held:
-        if e.get("hardven_yes_token") and e.get("hardven_no_token"):
-            continue                                  # re-filled against the current board
         ev = e.get("event_id") or ""
+        was_kept = bool(saved.get("hardven_kept_since"))
+        if e.get("hardven_yes_token") and e.get("hardven_no_token"):
+            if was_kept:                              # the board has it again: same matchup, a new one, or (never
+                new, old = e["hardven_yes_token"], saved.get("hardven_yes_token") or ""   # expected) the other side
+                how = ("listed again" if new == old else "re-filled on the OTHER side"
+                       if new.rsplit(":", 1)[0] == old.rsplit(":", 1)[0] else "re-pointed")
+                kept_log.append((_ended(e, saved, how), e))
+            continue                                  # re-filled against the current board
         if ev and (ev in done_events or ev in mirror_conflicts):
+            if was_kept:
+                kept_log.append((_ended(e, saved, "other market" if ev in done_events else "mirror conflict"), e))
             continue                                  # its event re-paired through a sibling row, or conflicted
         since = saved.get("hardven_kept_since") or now_iso
         anchor = _pin_dt(e.get("hardven_start_time") or "") or _pin_dt(since)
@@ -703,12 +726,41 @@ def main() -> None:
               f"age cap.")
 
     # ── price-consistency gate: reject wrong-game pairs + fix inverted sides by live prices ──
+    # Not on the rows kept above: between session windows their price is frozen (see KEPT ROWS above).
+    #
+    # NOR MAY IT SWAP A SIDE THE BOARD'S OWN NAMES SETTLE (2026-11-13). The gate swaps whenever the two venues sit
+    # either side of 50c, and Pinnacle's price carries its margin, so near even it is above 50c on BOTH sides:
+    # Kalshi 0.49 vs Pinnacle 0.52 read as "inverted". The name audit below then found the YES token naming the
+    # opponent and blanked the row - and with one market paired per event, the whole MATCH went unpaired. On 11-13
+    # that was 5 matches at once, all at 46-50c, about half of every coin flip on the board (paired markets at
+    # 45-50c: 5, against 17 at 40-45c and 10 at 50-55c). A row whose YES token's player shares a name with
+    # Kalshi's outcome and whose NO token's player does not is settled by name: the gate judges it on that side
+    # only - stands within tolerance, rejected as a wrong game beyond it, never swapped. The only rows that end
+    # differently are the ones the audit would have blanked after the swap. Names that cannot settle it (missing,
+    # or both players sharing one) leave the row to the gate exactly as before.
+    raw_names = {s_.get("selection_id"): (s_.get("selection_name") or "")
+                 for s_ in cat if s_.get("selection_id")}
+
+    def _ntok(x: str) -> set:
+        return {w for w in re.sub(r"[^a-z ]", " ", (x or "").lower()).split() if len(w) >= 3}
+
+    named_side = set()
+    for e in pairs:
+        _out = _ntok(e.get("kalshi_outcome") or e.get("outcome") or "")
+        _py = raw_names.get(e.get("hardven_yes_token") or "")
+        _pn = raw_names.get(e.get("hardven_no_token") or "")
+        if _out and _py and _pn and (_out & _ntok(_py)) and not (_out & _ntok(_pn)):
+            named_side.add(id(e))
+    kept_ids = {id(e) for rec, e in kept_log if rec["decision"] == "kept"}
     gate = (0, 0, 0, 0)
+    names_kept: list[str] = []
     if not args.no_price_gate:
-        gate = price_validate(pairs, args.sidecar, args.price_tol)
+        gate = price_validate([e for e in pairs if id(e) not in kept_ids], args.sidecar, args.price_tol,
+                              keep_side=named_side, kept_out=names_kept)
         if any(gate):
             print(f"[PAIR] price-gate (tol={args.price_tol}): {gate[0]} consistent | {gate[1]} inverted-fixed | "
-                  f"{gate[2]} wrong-game rejected | {gate[3]} unvalidated (no price)")
+                  f"{gate[2]} wrong-game rejected | {gate[3]} unvalidated (no price)"
+                  + (f" | {len(names_kept)} near-even row(s) kept on the side their names settle" if names_kept else ""))
 
     # ── ORIENTATION AUDIT: does the assigned token actually NAME the outcome? ─────────────────────────
     # THE INVARIANT, checked against the RAW catalog rather than any structure derived from it.
@@ -727,12 +779,7 @@ def main() -> None:
     #
     # Name TOKENS, not substrings: "Felipe Meligeni Alves" vs "Felipe Meligeni Rodrigues Alves" and
     # "Jazmin Ortenzi" vs "Jasmin Ortenzi" are the same player, and a substring test strips both (it did).
-    raw_names = {s_.get("selection_id"): (s_.get("selection_name") or "")
-                 for s_ in cat if s_.get("selection_id")}
-
-    def _ntok(x: str) -> set:
-        return {w for w in re.sub(r"[^a-z ]", " ", (x or "").lower()).split() if len(w) >= 3}
-
+    # (`raw_names` and `_ntok` are built above the price gate, which uses them too.)
     misoriented = 0
     for e in pairs:
         yt = e.get("hardven_yes_token") or ""
@@ -784,15 +831,23 @@ def main() -> None:
             print(f"         {ev}")
 
     valid = sum(1 for e in pairs if e.get("hardven_yes_token") and e.get("hardven_no_token"))
-    # The kept rows' final state, after every check of this run (a price-gate or mirror clear shows up here).
+    # The final state of every kept row, and of every re-filled one that was kept until now, after every check of
+    # this run (a name-audit or price-gate clear shows up here).
     for rec, e in kept_log:
-        if rec["decision"] == "kept":
-            rec["final"] = ("kept" if e.get("hardven_yes_token") == rec["token"]
-                            else "cleared later in this run (price gate / orientation / mirror check)")
-    kept_note = (f" | kept {sum(1 for r, _ in kept_log if r.get('final') == 'kept')} unlisted row(s), released "
+        want = rec["token"] if rec["decision"] == "kept" else rec.get("new_token")
+        if rec["decision"] == "released" or not want:
+            continue
+        have = e.get("hardven_yes_token")
+        rec["final"] = (("kept" if rec["decision"] == "kept" else "paired") if have == want
+                        else "swapped later in this run (price gate)" if have
+                        else "cleared later in this run (price gate / orientation / mirror check)")
+        if not have:
+            e.pop("hardven_kept_since", None)         # a cleared row is not kept any more
+    kept_recs = [r for r, _ in kept_log if r["decision"] == "kept"]
+    kept_note = (f" | kept {sum(1 for r in kept_recs if r.get('final') == 'kept')} unlisted row(s), released "
                  f"{released} (pair_kept.jsonl)" if kept_log else "")
     if args.write and (filled or gate[1] or gate[2] or url_n or start_n or backfilled or repointed or stamped
-                       or named):
+                       or named or misoriented or retracted):
         atomic_write_json(args.pairs, pairs)   # atomic → the C# hot-reload never reads a partial cross_pairs.json
         print(f"\n[PAIR] wrote {valid} filled pair(s) → {args.pairs}{kept_note}")
     elif not args.write:
@@ -804,11 +859,15 @@ def main() -> None:
         # one a later run found on the board again by whether that later run logged it - and a run that kept
         # nothing used to leave no trace, so a row listed again (same matchup: no ledger entry either) read
         # "still kept" forever. `refilled` = held rows the board re-filled (or a sibling market re-paired).
+        # `ended` (2026-11-13) = rows kept until this run that are not any more, each logged with how; its presence
+        # tells the report this run logs endings, so a kept row with no record here left the pair file.
         run_rec = {"at": now_iso, "run": {
             "held": retired, "refilled": retired - kept - released,
-            "kept": sum(1 for r, _ in kept_log if r.get("final") == "kept"),
-            "cleared_later": sum(1 for r, _ in kept_log if str(r.get("final") or "").startswith("cleared")),
-            "released": released, "named": named}}
+            "kept": sum(1 for r in kept_recs if r.get("final") == "kept"),
+            "cleared_later": sum(1 for r in kept_recs if str(r.get("final") or "").startswith("cleared")),
+            "released": released, "named": named,
+            "ended": sum(1 for r, _ in kept_log if r["decision"] == "ended"),
+            "names_kept": len(names_kept)}}           # near-even rows the gate would have swapped (and lost)
         try:                                   # best-effort: an audit log must never cost a pairing run
             with open(Path(args.pairs).with_name("pair_kept.jsonl"), "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(run_rec) + "\n")

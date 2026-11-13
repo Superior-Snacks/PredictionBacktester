@@ -92,8 +92,13 @@ def _log_lines(path):
 
 
 def kept_log(path):
-    """The row records (kept / released) - the per-run records are run_log's."""
-    return [j for j in _log_lines(path) if "run" not in j]
+    """The row records (kept / released) - the per-run records are run_log's, the endings ended_log's."""
+    return [j for j in _log_lines(path) if "run" not in j and j.get("decision") != "ended"]
+
+
+def ended_log(path):
+    """How rows kept until a run ended at it (re-filled / other market / conflict)."""
+    return [j for j in _log_lines(path) if j.get("decision") == "ended"]
 
 
 def run_log(path):
@@ -121,7 +126,7 @@ check("record: kept, final kept, the token, the evidence",
 check("record: hours past the listed start", L and 1.9 < L[0]["hours_past_start"] < 2.1, L[:1])
 RL = run_log(path)
 check("one run record: held 1, kept 1", RL == [{"held": 1, "refilled": 0, "kept": 1, "cleared_later": 0,
-                                               "released": 0, "named": 0}], RL)
+                                               "released": 0, "named": 0, "ended": 0, "names_kept": 0}], RL)
 check("the run record shares the rows' timestamp, and comes first",
       _log_lines(path)[0].get("run") is not None and _log_lines(path)[0]["at"] == L[0]["at"], _log_lines(path)[:2])
 
@@ -145,9 +150,14 @@ check("kept_since cleared", "hardven_kept_since" not in a, a.get("hardven_kept_s
 check("the mirror market stays unpaired", not row(out, GAV["kalshi_ticker"]).get("hardven_yes_token"))
 check("summary", "1 re-filled from it, 0 not listed" in log, log[-500:])
 check("no audit record (nothing kept)", not kept_log(path))
+EL = ended_log(path)
+check("the ending is logged: re-pointed at the live matchup, paired at the end of the run",
+      len(EL) == 1 and EL[0]["how"] == "re-pointed" and EL[0]["token"] == ABI["hardven_yes_token"]
+      and EL[0]["new_token"] == "209991:1640367833:home" and EL[0]["kept_since"] == since
+      and EL[0]["final"] == "paired", EL)
 check("but a run record: the held row was re-filled", run_log(path) == [{"held": 1, "refilled": 1, "kept": 0,
                                                                          "cleared_later": 0, "released": 0,
-                                                                         "named": 0}], run_log(path))
+                                                                         "named": 0, "ended": 1, "names_kept": 0}], run_log(path))
 
 print("\n[3] the event re-pairs through its OTHER market -> the old row stays clear (no two matchups per event)")
 out, log, wrote, path = run([copy.deepcopy(GAV), copy.deepcopy(ABI)], OTHER + LIVE)
@@ -187,7 +197,7 @@ check("summary", "1 released by the 12h age cap" in log, log[-500:])
 L = kept_log(path)
 check("audit record: released with the reason", L and L[0]["decision"] == "released" and "past its listed start" in L[0]["reason"], L)
 check("run record counts the release", run_log(path) == [{"held": 1, "refilled": 0, "kept": 0, "cleared_later": 0,
-                                                           "released": 1, "named": 0}], run_log(path))
+                                                           "released": 1, "named": 0, "ended": 0, "names_kept": 0}], run_log(path))
 
 print("\n[8] the cap is HARDVEN_PAIR_KEEP_MAX_H")
 os.environ["HARDVEN_PAIR_KEEP_MAX_H"] = "20"
@@ -204,15 +214,16 @@ check("kept 13h ago -> released", not row(out, ABI["kalshi_ticker"]).get("hardve
 out, log, wrote, path = run([dict(copy.deepcopy(nostart), hardven_kept_since=START)], OTHER)
 check("kept 2h ago -> kept", row(out, ABI["kalshi_ticker"]).get("hardven_yes_token") == ABI["hardven_yes_token"])
 
-print("\n[10] a kept row a later check of the same run clears -> logged as cleared, not as kept")
-def blank_abi(pairs, sidecar, tol):
-    for e in pairs:
-        if e.get("kalshi_ticker") == ABI["kalshi_ticker"]:
-            e["hardven_yes_token"] = e["hardven_no_token"] = ""
-    return (0, 0, 1, 0)
-out, log, wrote, path = run([copy.deepcopy(ABI)], OTHER, gate=blank_abi)
+print("\n[10] a kept row a later check of the same run clears (the name audit: its matchup is listed under OTHER\n"
+      "     names, so the matcher could not re-fill it) -> logged as cleared, not as kept, and the clear is written")
+RENAMED = game("209991", "1640349718", "Xavier Abcde", "Yannick Defgh")
+prev = dict(copy.deepcopy(ABI), hardven_kept_since=START)        # kept since an earlier run: nothing to stamp
+out, log, wrote, path = run([prev], OTHER + RENAMED)
 L = kept_log(path)
+a = row(out, ABI["kalshi_ticker"])
 check("final says cleared later", L and L[0]["final"].startswith("cleared later"), L)
+check("the clear reached the file (tokens, names and the kept stamp gone)",
+      wrote and not a.get("hardven_yes_token") and not a.get("hardven_yes_name") and "hardven_kept_since" not in a, a)
 check("last line counts it out", "kept 0 unlisted row(s)" in log.strip().splitlines()[-1], log.strip().splitlines()[-1])
 check("run record: kept 0, cleared_later 1", run_log(path) and run_log(path)[0]["kept"] == 0
       and run_log(path)[0]["cleared_later"] == 1, run_log(path))
@@ -256,6 +267,90 @@ finally:
 out, log, wrote, path = run([copy.deepcopy(ABI)], OTHER)
 check("a row that has its names: names_from=file, untouched", kept_log(path)[0].get("names_from") == "file"
       and row(out, ABI["kalshi_ticker"]).get("hardven_yes_name") == "mohamed ali abibsi")
+
+print("\n[13] the PRICE GATE never sees a kept row (between session windows its price is frozen) - but still\n"
+      "     checks every row the board re-filled")
+FOO_LISTED = game("209991", "1640355555", "Ann Foo", "Bea Bar")
+seen = []
+def spy_blank_all(pairs, sidecar, tol, **kw):
+    """A gate that would clear EVERY row it is given - the in-play-vs-frozen-price misfire of 11-12/13."""
+    for e in pairs:
+        if e.get("hardven_yes_token"):
+            seen.append(e["kalshi_ticker"])
+            e["hardven_yes_token"] = e["hardven_no_token"] = ""
+    return (0, 0, len(seen), 0)
+out, log, wrote, path = run([copy.deepcopy(ABI), copy.deepcopy(FOO)], OTHER + FOO_LISTED, gate=spy_blank_all)
+check("the gate was given the re-filled row only", seen == [FOO["kalshi_ticker"]], seen)
+check("the kept row survives it, final kept", row(out, ABI["kalshi_ticker"]).get("hardven_yes_token") == ABI["hardven_yes_token"]
+      and kept_log(path)[0]["final"] == "kept", kept_log(path))
+check("the re-filled row is still gated (cleared by it)", not row(out, FOO["kalshi_ticker"]).get("hardven_yes_token"))
+
+print("\n[14] how a row kept until now ENDS is logged, every way it can")
+k = dict(copy.deepcopy(ABI), hardven_kept_since=START)
+out, log, wrote, path = run([k, copy.deepcopy(GAV)], OTHER + PRE)
+EL = ended_log(path)
+check("P back on the board -> 'listed again', same token, paired", len(EL) == 1 and EL[0]["how"] == "listed again"
+      and EL[0]["new_token"] == ABI["hardven_yes_token"] and EL[0]["final"] == "paired", EL)
+check("  and the run record counts it", run_log(path)[0]["ended"] == 1 and run_log(path)[0]["kept"] == 0, run_log(path))
+check("  and the row is no longer marked kept", "hardven_kept_since" not in row(out, ABI["kalshi_ticker"]))
+out, log, wrote, path = run([copy.deepcopy(GAV), dict(copy.deepcopy(ABI), hardven_kept_since=START)], OTHER + LIVE)
+EL = ended_log(path)
+check("its event re-paired through the sibling -> 'other market'", len(EL) == 1 and EL[0]["how"] == "other market"
+      and EL[0]["new_token"] is None and "final" not in EL[0], EL)
+out, log, wrote, path = run([copy.deepcopy(ABI), copy.deepcopy(GAV)], OTHER + PRE)
+check("a row that was NOT kept before logs no ending", not ended_log(path) and run_log(path)[0]["ended"] == 0,
+      _log_lines(path))
+def swap_all(pairs, sidecar, tol, **kw):
+    for e in pairs:
+        if e.get("hardven_yes_token"):
+            e["hardven_yes_token"], e["hardven_no_token"] = e["hardven_no_token"], e["hardven_yes_token"]
+    return (0, 1, 0, 0)
+out, log, wrote, path = run([dict(copy.deepcopy(ABI), hardven_kept_since=START), copy.deepcopy(GAV)], OTHER + PRE,
+                            gate=swap_all)
+EL = ended_log(path)
+check("re-filled, then the gate swaps its sides -> final says so (and the name audit then clears it)",
+      len(EL) == 1 and EL[0]["final"].startswith(("swapped", "cleared")), EL)
+
+print("\n[15] COIN FLIPS (the REAL price gate, prices stubbed): Pinnacle's margin puts a near-even match above 50c on\n"
+      "     BOTH sides, so Kalshi 0.49 vs Pinnacle 0.52 reads as 'inverted'. The board's names settle the side.")
+import pair_auto as A  # noqa: E402
+REAL_GATE, REAL_FETCH = A.price_validate, A._fetch_implied
+try:
+    def prices(home, away):
+        A._fetch_implied = lambda sidecar, tokens: {t: (home if t.endswith(":home") else away) for t in tokens}
+
+    prices(0.52, 0.52)
+    out, log, wrote, path = run([dict(copy.deepcopy(ABI), kalshi_yes_price=0.49), copy.deepcopy(GAV)], OTHER + PRE,
+                                gate=REAL_GATE)
+    a = row(out, ABI["kalshi_ticker"])
+    check("stays paired on the named side (Abibsi = home), not swapped and blanked",
+          (a.get("hardven_yes_token"), a.get("hardven_yes_name")) == (ABI["hardven_yes_token"], "mohamed ali abibsi"),
+          (a.get("hardven_yes_token"), a.get("hardven_yes_name")))
+    check("logged NAMES-KEEP, no MIS-ORIENTED", "NAMES-KEEP KXITFMATCH-26NOV12ABIGAV-ABI" in log and "MIS-ORIENTED" not in log,
+          log[-600:])
+    check("not flagged inverted", not a.get("price_inverted_fixed"))
+    check("run record: names_kept 1", run_log(path)[0]["names_kept"] == 1, run_log(path))
+
+    prices(0.85, 0.17)                                          # the named side at 0.85 vs Kalshi 0.10: no coin flip
+    out, log, wrote, path = run([dict(copy.deepcopy(ABI), kalshi_yes_price=0.10), copy.deepcopy(GAV)], OTHER + PRE,
+                                gate=REAL_GATE)
+    check("names never rescue a real conflict: 0.75 off on its named side -> rejected as a wrong game",
+          not row(out, ABI["kalshi_ticker"]).get("hardven_yes_token") and "PRICE-REJECT" in log
+          and run_log(path)[0]["names_kept"] == 0, log[-600:])
+
+    prices(0.08, 0.95)                                          # the usual case: both venues agree
+    out, log, wrote, path = run([copy.deepcopy(ABI), copy.deepcopy(GAV)], OTHER + PRE, gate=REAL_GATE)
+    check("agreeing prices: paired, nothing logged", row(out, ABI["kalshi_ticker"]).get("hardven_yes_token") ==
+          ABI["hardven_yes_token"] and "NAMES-KEEP" not in log and "PRICE-REJECT" not in log, log[-400:])
+
+    TWIN = dict(copy.deepcopy(ABI), kalshi_outcome="Mohamed Abibsi", kalshi_yes_price=0.49)
+    prices(0.52, 0.52)
+    out, log, wrote, path = run([TWIN, copy.deepcopy(GAV)], OTHER + game("209991", "1640349718", "Mohamed Ali Abibsi",
+                                                                       "Karim Abibsi"), gate=REAL_GATE)
+    check("names that cannot settle it (both players share 'abibsi'): left to the gate as before",
+          "NAMES-KEEP" not in log and run_log(path)[0]["names_kept"] == 0, log[-600:])
+finally:
+    A.price_validate, A._fetch_implied = REAL_GATE, REAL_FETCH
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

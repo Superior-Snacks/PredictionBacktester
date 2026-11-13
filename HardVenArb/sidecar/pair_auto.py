@@ -537,7 +537,8 @@ def duplicate_token_validate(pairs: list[dict]) -> tuple:
     return examined, blanked
 
 
-def price_validate(pairs: list[dict], sidecar: str, tol: float) -> tuple:
+def price_validate(pairs: list[dict], sidecar: str, tol: float, keep_side: set | None = None,
+                   kept_out: list | None = None) -> tuple:
     """PRICE-CONSISTENCY GATE. For each filled pair, the Kalshi-YES probability (kalshi_yes_price, from
     pairHard) and the bookmaker yes-token's implied prob must AGREE on the favorite — both are P(the same
     team). If they're COMPLEMENTS (book ≈ 1 − kalshi) the two sides are inverted → swap the tokens. If
@@ -552,7 +553,11 @@ def price_validate(pairs: list[dict], sidecar: str, tol: float) -> tuple:
     SAME side, which the executor then buys twice instead of hedging. That is a doubled directional bet, not
     a wash: it loses the whole stake on both venues rather than netting out (real case 2026-08-12, Dias vs
     Kawano Cho at 0.465/0.50). `sibling_validate` above is the check that actually covers this, because it
-    is structural rather than numeric. Run it FIRST."""
+    is structural rather than numeric. Run it FIRST.
+
+    `keep_side` (pair_pinnacle, 2026-11-13): ids of rows whose side the board's own names settle. Those are judged
+    in that orientation only, like a 3-way: within `tol` they stand, beyond it they are rejected as a wrong game -
+    never swapped. Each one the prices alone would have swapped (they straddle 50c) is appended to `kept_out`."""
     tokens = {e[k] for e in pairs for k in ("hardven_yes_token", "hardven_no_token") if e.get(k)}
 
     # WAIT FOR PRICES — THE FIRST FETCH IS WHAT WAKES THE FEED.
@@ -615,6 +620,25 @@ def price_validate(pairs: list[dict], sidecar: str, tol: float) -> tuple:
                 e.pop("fuzzy", None)
                 rejected += 1
             else:
+                consistent += 1
+            continue
+        if keep_side and id(e) in keep_side:
+            # THE BOARD'S NAMES SETTLE THE SIDE. Near even, Pinnacle's price (margin included) is above 50c on BOTH
+            # sides, so Kalshi at 0.49 vs Pinnacle 0.52 reads as "inverted" - and the swap made here used to be
+            # undone by the name audit blanking the row, which unpaired the whole match (5 at a time, 11-13).
+            if d_agree > tol:
+                print(f"[PAIR] PRICE-REJECT {tk}  kalshi_yes={ky:.2f} book_yes={by:.2f}  Δ{d_agree:.2f}>{tol} on the "
+                      f"side its names settle — likely WRONG GAME")
+                e["hardven_yes_token"] = e["hardven_no_token"] = ""
+                e.pop("fuzzy", None)
+                rejected += 1
+            else:
+                if d_invert < d_agree:
+                    e.pop("price_inverted_fixed", None)
+                    if kept_out is not None:
+                        kept_out.append(tk)
+                    print(f"[PAIR] NAMES-KEEP {tk}  kalshi_yes={ky:.2f} book_yes={by:.2f} straddle 50c — the board's "
+                          f"names settle the side, not swapped")
                 consistent += 1
             continue
         if min(d_agree, d_invert) > tol:

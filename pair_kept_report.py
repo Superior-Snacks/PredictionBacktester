@@ -6,11 +6,14 @@ instead of being emptied, so the bot keeps asking and the sidecar's redirect can
 moment there is one. Every pairing run logs one run record plus each kept or released row, with what the sidecar
 held for it, to HardVenArb/pair_kept.jsonl. This report checks that keeping them was RIGHT:
 
-  RUNS       per pairing run: rows re-checked against the board, re-filled from it, kept, released, named.
+  RUNS       per pairing run: rows re-checked against the board, re-filled from it, kept, released, named, and
+             how many rows kept until that run ended at it.
   EPISODES   each market's run of consecutive kept records: how long it was kept, hours from its listed start
              (negative = still before it), and how it ended - re-pointed at a new matchup / listed again (the same
-             matchup back on the board) / re-paired through its other market / dropped (market closed or cleared)
-             / released by the age cap / still kept.
+             matchup back on the board) / re-paired through its other market / market closed (Kalshi closed it, so
+             it left the pair file - the usual end of a match that was played while kept) / released by the age
+             cap / still kept. Since 2026-11-13 the pairing run logs each ending itself; before that it is worked
+             out from the ledger and the files, and "dropped" = could not tell.
   PRICED     did the bot get IN-PLAY prices for it while it was kept (the redirect working), from when.
   CORRECT    on those in-play rows, does Pinnacle's P_true track the Kalshi ask for the SAME side? A wrong match
              or a flipped side shows up as P_true tracking 1 - ask, or the two simply disagreeing. Compared with
@@ -84,16 +87,22 @@ def episodes(recs: list[dict]) -> list[dict]:
         if j.get("names_from"):
             e["names_from"] = j["names_from"]          # the latest run's answer
         if str(j.get("final") or "").startswith("cleared"):
-            e["cleared_by_check"] = True
+            e["cleared_by_check"] = ts(j["at"])
     return list(by.values())
 
 
 def how_it_ended(e: dict, run_times: list, ledger: dict, pairs_now: dict | None, by_event: dict,
-                 now: dt.datetime) -> None:
+                 now: dt.datetime, endings: dict, logs_endings: set, eps_by_ticker: dict) -> None:
     """Sets e["kind"], e["end"], e["until"]. A kept row is re-checked at every run; the first run after its last
-    record that did NOT keep it is when the keeping ended, and the ledger + the pair file say how."""
+    record that did NOT keep it is when the keeping ended. Since 2026-11-13 that run logs how (an "ended" record),
+    and a kept row with no record at all there had left the pair file: Kalshi closed the market. Older runs logged
+    no endings, so for those the ledger + the files say how, as well as they can."""
     if e["kind"] == "released":
         e["until"] = e["last"]
+        return
+    if e.get("cleared_by_check"):                    # a check of its last run took the pairing away: ended there
+        e["until"] = e["last"]
+        e["kind"], e["end"] = "cleared", f"cleared {e['last']:%H:%M}"
         return
     nxt = next((t for t in run_times if t > e["last"]), None)
     cur = (pairs_now or {}).get(e["ticker"]) or {}
@@ -105,17 +114,29 @@ def how_it_ended(e: dict, run_times: list, ledger: dict, pairs_now: dict | None,
             e["kind"], e["end"] = "no longer kept", "no longer kept"
         return
     e["until"] = nxt
+    if nxt in logs_endings:
+        rec = endings.get((e["ticker"], nxt))
+        kind = "market closed" if rec is None else (rec.get("how") or "ended")
+        fin = str((rec or {}).get("final") or "")
+        if fin.startswith(("cleared", "swapped")):
+            e["after_end"] = fin.split(" (")[0]      # re-filled, then a check of the same run took it away
+        e["kind"], e["end"] = kind, f"{kind} {nxt:%H:%M}"
+        return
     moved = any(e["last"] < at <= nxt + LEDGER_LAG and tok != e["token"] for at, tok in ledger.get(e["ticker"], []))
     sib = [r for r in by_event.get(e.get("event_id") or "", ()) if r.get("kalshi_ticker") != e["ticker"]
            and r.get("hardven_yes_token")]
     if moved:
         kind = "re-pointed"                          # a new matchup (the live replacement, a re-listing)
+    elif any(o["first"] > e["last"] for o in eps_by_ticker.get(e["ticker"], ())):
+        kind = "listed again"                        # kept again later, so it was paired in between: re-filled
     elif cur.get("hardven_yes_token"):
         kind = "listed again"                        # the same matchup back on the board
     elif sib:
         kind = "other market"                        # its event re-paired through the sibling market
+    elif pairs_now is not None and e["ticker"] not in pairs_now:
+        kind = "market closed"                       # gone from the pair file (when exactly, an old run can't say)
     else:
-        kind = "dropped"                             # Kalshi closed the market, or a check cleared it
+        kind = "dropped"                             # still listed by Kalshi, unpaired, and no record says why
     e["kind"], e["end"] = kind, f"{kind} {nxt:%H:%M}"
 
 
@@ -141,7 +162,7 @@ def main() -> None:
 
     recs = load_log(since)
     runs = [j for j in recs if "run" in j]
-    rowrecs = [j for j in recs if "run" not in j]
+    rowrecs = [j for j in recs if "run" not in j and j.get("decision") != "ended"]
     if not rowrecs:
         n = len(runs)
         print(f"kept pairs{scope}: none kept" + (f" ({n} pairing run(s) logged, every paired row found on the board)"
@@ -149,7 +170,13 @@ def main() -> None:
         return
     eps = episodes(rowrecs)
     now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
-    run_times = sorted({ts(j["at"]) for j in load_log(None)})      # every run ever: an episode may end after --since
+    every = load_log(None)                                          # every run ever: an episode may end after --since
+    run_times = sorted({ts(j["at"]) for j in every})
+    logs_endings = {ts(j["at"]) for j in every if "ended" in (j.get("run") or {})}
+    endings = {(j.get("ticker"), ts(j["at"])): j for j in every if j.get("decision") == "ended"}
+    eps_by_ticker = collections.defaultdict(list)
+    for e in eps:
+        eps_by_ticker[e["ticker"]].append(e)
 
     ledger = collections.defaultdict(list)
     for line in open(LEDGER, encoding="utf-8"):
@@ -169,7 +196,7 @@ def main() -> None:
     except Exception:
         pairs_now, by_event = None, {}
     for e in eps:
-        how_it_ended(e, run_times, ledger, pairs_now, by_event, now)
+        how_it_ended(e, run_times, ledger, pairs_now, by_event, now, endings, logs_endings, eps_by_ticker)
 
     # ── the bot's rows for kept markets while kept (tennis + the shadow sports), and the tennis baseline ──
     want = collections.defaultdict(list)
@@ -222,6 +249,7 @@ def main() -> None:
         return (st.mean(abs(p - a) for _, _, p, a, _ in rs), st.mean(abs((1 - p) - a) for _, _, p, a, _ in rs))
 
     flags = []
+    pre_fix = set()             # flags from runs before 2026-11-13's fix (known, explained; kept until they age out)
     for e in eps:
         rs = rows.get(id(e), [])
         e["n"] = len(rs)
@@ -239,7 +267,17 @@ def main() -> None:
         if e.get("names_from") == "none" and e["kind"] == "still kept":
             flags.append((e, "KEPT WITHOUT NAMES at the latest run - the redirect cannot follow it"))
         if e.get("cleared_by_check"):
-            flags.append((e, "a later check of a pairing run (price gate / orientation / mirror) cleared it"))
+            if e["cleared_by_check"] in logs_endings:
+                flags.append((e, "a later check of a pairing run (the name audit) cleared it while kept"))
+            else:               # the price gate, which read kept rows until 11-13 - between session windows a frozen price
+                pre_fix.add(len(flags))
+                flags.append((e, "the price gate cleared it while kept (before the 11-13 fix: between session "
+                                 "windows it compared a FROZEN price with Kalshi's live one; kept rows skip it now)"))
+        if e.get("after_end"):
+            flags.append((e, f"{e['end']}, then {e['after_end']} - the market lost its pairing"))
+        if e["kind"] in ("re-filled on the OTHER side", "mirror conflict"):
+            flags.append((e, f"{e['end']} - the board disagrees with the side it was kept on"
+                             if e["kind"] != "mirror conflict" else f"{e['end']} - both markets of its event unpaired"))
 
     # ── fills on kept markets while kept ──
     fills = []
@@ -273,14 +311,16 @@ def main() -> None:
 
     live_eps = [e for e in eps if e["n"]]
     kinds = collections.Counter(e["kind"] for e in eps)
-    order = ("still kept", "re-pointed", "listed again", "other market", "dropped", "released", "no longer kept")
+    order = ("still kept", "re-pointed", "listed again", "other market", "market closed", "released", "cleared",
+             "re-filled on the OTHER side", "mirror conflict", "dropped", "no longer kept")
     ends = ", ".join(f"{kinds[k]} {k if k != 'released' else 'released by the age cap'}" for k in order
                      if kinds[k] or k in ("still kept", "released"))
     if a.line:
         warn = "⚠ " if flags else ""
         print(f"{warn}kept pairs{scope}: {len(eps)} market(s) kept - {ends}; {len(live_eps)} priced in-play while "
               f"kept ({sum(e['n'] for e in eps)} rows), {len(fills)} fill(s); "
-              + (f"{len(flags)} FLAGGED" if flags else "all checks pass"))
+              + (f"{len(flags)} FLAGGED" + (f" ({'all' if len(pre_fix) == len(flags) else len(pre_fix)} from before "
+                                             f"the 11-13 fix)" if pre_fix else "") if flags else "all checks pass"))
         return
 
     print(f"KEPT PAIRS AUDIT  {len(rowrecs)} row record(s), {len(eps)} episode(s), from {lo:%m-%d %H:%M} UTC")
@@ -297,7 +337,9 @@ def main() -> None:
             r = j["run"]
             print(f"      {ts(j['at']):%m-%d %H:%M}  re-checked {r.get('held', 0):4d}: re-filled {r.get('refilled', 0):4d}, "
                   f"kept {r.get('kept', 0):3d}, released {r.get('released', 0)}, cleared later {r.get('cleared_later', 0)}, "
-                  f"named from the sidecar {r.get('named', 0)}")
+                  f"named from the sidecar {r.get('named', 0)}"
+                  + (f", endings logged {r['ended']}" if "ended" in r else "")
+                  + (f" | near-even rows kept on their named side {r['names_kept']}" if "names_kept" in r else ""))
     print("\n   vs start = hours from the listed start at the latest run (negative = still before it)")
     print("   market                              kept since    vs start  runs  end                       in-play rows (from)   |P-ask|  |(1-P)-ask|")
     for e in sorted(eps, key=lambda e: e["kept_since"]):
