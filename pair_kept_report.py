@@ -79,6 +79,8 @@ def episodes(recs: list[dict]) -> list[dict]:
         e["runs"] += 1
         if j.get("hours_past_start") is not None:
             e["vs_start"] = float(j["hours_past_start"])   # the latest run's (time only moves on)
+            if j.get("decision") == "kept":                # what the age-cap check reads (not the release run's)
+                e["kept_past"] = max(e.get("kept_past", float("-inf")), e["vs_start"])
         if j.get("decision") == "released":
             e["kind"] = "released"
             e["end"] = "released: " + (j.get("reason") or "")
@@ -261,9 +263,20 @@ def main() -> None:
             if inv + WRONG_SIDE_MARGIN < same:
                 flags.append((e, f"POSSIBLE WRONG SIDE/MATCH: 1-P_true matches the ask better ({inv:.3f} vs {same:.3f})"))
             elif same > DISAGREE:
-                flags.append((e, f"PRICES DISAGREE: mean |P_true - ask| {same:.3f} > {DISAGREE}"))
-        if (e["vs_start"] or 0) > 12:
-            flags.append((e, f"kept {e['vs_start']:.1f}h past its listed start"))
+                # A FROZEN QUOTE IS NOT A WRONG PAIRING. When Pinnacle's price never moves (suspended, live betting
+                # pulled mid-match - 11-13 SAKBOS: one price for 3h of play), Kalshi alone moves and the gap grows;
+                # that says nothing about whether the pairing is right. Say so, and whether the bot acted on it.
+                ps = {(s, round(p, 4)) for _, s, p, _, _ in rs}
+                frozen = len(ps) <= len({s for _, s, _, _, _ in rs})
+                nsig = sum(1 for *_, dcs in rs if dcs == "SIGNAL")
+                flags.append((e, f"PRICES DISAGREE: mean |P_true - ask| {same:.3f} > {DISAGREE}"
+                                 + (f" - Pinnacle's price never moved in {len(rs)} in-play rows (a FROZEN quote: "
+                                    f"Kalshi moved, Pinnacle did not; says nothing about the pairing)" if frozen else "")
+                                 + (f"; {nsig} SIGNAL row(s) - check them" if nsig else "; the bot refused every row")))
+        # THE CAP'S OWN RELEASE IS NOT A FLAG: runs are ~90 min apart, so the run that releases a row reads 12.0-13.5h
+        # by definition (11-14: two releases flagged as "kept 12.4h / 13.3h"). Only a row still KEPT past 12h is one.
+        if (e.get("kept_past") or 0) > 12:
+            flags.append((e, f"kept {e['kept_past']:.1f}h past its listed start - the 12h age cap did not release it"))
         if e.get("names_from") == "none" and e["kind"] == "still kept":
             flags.append((e, "KEPT WITHOUT NAMES at the latest run - the redirect cannot follow it"))
         if e.get("cleared_by_check"):
