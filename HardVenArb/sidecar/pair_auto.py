@@ -408,8 +408,14 @@ def _pick_game(games: list, entry: dict, time_tol_sec: float):
     return min(cands, key=_ddiff)
 
 
-def _fetch_implied(sidecar: str, tokens: set) -> dict:
-    """{selection_id: implied_price} for OPEN book selections, via the sidecar /odds (one batched call)."""
+def _fetch_implied(sidecar: str, tokens: set, live_max_age: float | None = None, stale: set | None = None) -> dict:
+    """{selection_id: implied_price} for OPEN book selections, via the sidecar /odds (one batched call).
+
+    `live_max_age` (pair_pinnacle, 2026-11-18): an IN-PLAY selection whose quote is older than this many seconds is
+    left out, and its id added to `stale`. The Pinnacle sidecar stamps ts=now on every token while its feed is up
+    and serves the stored ts once it is not (session break, logout), so an old in-play ts is a price FROZEN when the
+    session closed - and an in-play price moves too far in minutes to hold anything against. None = every open
+    selection, as before (the other pairers)."""
     if not tokens:
         return {}
     try:
@@ -420,9 +426,19 @@ def _fetch_implied(sidecar: str, tokens: set) -> dict:
         print(f"[PAIR] price-gate: could not fetch /odds ({ex}) — skipping price validation.")
         return {}
     out = {}
+    now = time.time()
     for sid, s in (data.get("selections") or {}).items():
         ip = s.get("implied_price")
         if s.get("status") == "open" and ip:
+            if live_max_age is not None and s.get("live"):
+                try:
+                    age = now - float(s.get("ts") or 0.0)
+                except (TypeError, ValueError):
+                    age = float("inf")
+                if age > live_max_age:
+                    if stale is not None:
+                        stale.add(sid)
+                    continue
             out[sid] = float(ip)
     return out
 
@@ -538,7 +554,8 @@ def duplicate_token_validate(pairs: list[dict]) -> tuple:
 
 
 def price_validate(pairs: list[dict], sidecar: str, tol: float, keep_side: set | None = None,
-                   kept_out: list | None = None) -> tuple:
+                   kept_out: list | None = None, live_max_age: float | None = None,
+                   stale_out: list | None = None) -> tuple:
     """PRICE-CONSISTENCY GATE. For each filled pair, the Kalshi-YES probability (kalshi_yes_price, from
     pairHard) and the bookmaker yes-token's implied prob must AGREE on the favorite — both are P(the same
     team). If they're COMPLEMENTS (book ≈ 1 − kalshi) the two sides are inverted → swap the tokens. If
@@ -557,8 +574,20 @@ def price_validate(pairs: list[dict], sidecar: str, tol: float, keep_side: set |
 
     `keep_side` (pair_pinnacle, 2026-11-13): ids of rows whose side the board's own names settle. Those are judged
     in that orientation only, like a 3-way: within `tol` they stand, beyond it they are rejected as a wrong game -
-    never swapped. Each one the prices alone would have swapped (they straddle 50c) is appended to `kept_out`."""
+    never swapped. Each one the prices alone would have swapped (they straddle 50c) is appended to `kept_out`.
+
+    `live_max_age` (pair_pinnacle, 2026-11-18): an IN-PLAY price older than this many seconds is not judged - the row
+    stands, counted unvalidated, its ticker appended to `stale_out`. Pairing runs every 90 min round the clock and the
+    Pinnacle session only inside its windows, so a run in a break held Pinnacle's price from the window's close
+    against Kalshi's live one. 11-13..11-18 such runs judged 14 in-play tennis rows and REJECTED 5 as "wrong game"
+    (checked against Kalshi's candle at each run: the venues 0.19-0.48 apart after 8-50 min of play) - 3 kept rows
+    just re-pointed to their live match and 2 ordinary ones. All were right; 4 of those matches were still being
+    played when the session came back and went unpriced to the end (~165 in-play minutes). Inside a window every
+    price is stamped fresh, so this changes nothing there; pre-match rows are judged as before (a pre-match price
+    barely moves in a break). See _fetch_implied."""
     tokens = {e[k] for e in pairs for k in ("hardven_yes_token", "hardven_no_token") if e.get(k)}
+    stale: set = set()
+    fkw = {} if live_max_age is None else {"live_max_age": live_max_age, "stale": stale}
 
     # WAIT FOR PRICES — THE FIRST FETCH IS WHAT WAKES THE FEED.
     #
@@ -577,13 +606,15 @@ def price_validate(pairs: list[dict], sidecar: str, tol: float, keep_side: set |
         _wait = float(os.environ.get("HARDVEN_PRICE_GATE_WAIT_SEC", "10"))
     except ValueError:
         _tries, _wait = 6, 10.0
-    implied = _fetch_implied(sidecar, tokens)
+    implied = _fetch_implied(sidecar, tokens, **fkw)
     _want = max(1, len(tokens) // 2)          # half priced is plenty to validate against
-    while _tries > 0 and len(implied) < _want:
+    # (a frozen in-play price is still a price the feed delivered: it counts as "awake", not as missing)
+    while _tries > 0 and len(implied) + len(stale) < _want:
         print(f"[PAIR] price gate: only {len(implied)}/{len(tokens)} token(s) priced — the odds feed is still "
               f"waking (it connects on the first /odds). Waiting {_wait:.0f}s, {_tries} attempt(s) left.")
         time.sleep(_wait)
-        implied = _fetch_implied(sidecar, tokens)
+        stale.clear()
+        implied = _fetch_implied(sidecar, tokens, **fkw)
         _tries -= 1
     if len(implied) < _want:
         print(f"[PAIR] price gate: STILL only {len(implied)}/{len(tokens)} token(s) priced. Three-way pairs "
@@ -598,6 +629,8 @@ def price_validate(pairs: list[dict], sidecar: str, tol: float, keep_side: set |
         by = implied.get(yt)
         if ky is None or by is None:
             unvalidated += 1
+            if by is None and yt in stale and stale_out is not None:
+                stale_out.append(e.get("kalshi_ticker", "?"))     # in play, Pinnacle frozen: left standing
             # A 3-WAY THAT COULD NOT BE PRICED HAS NO CHECK AT ALL, so say so on the row itself.
             # The sibling/mirror assertion cannot catch a 3-way swap: swapping the two team legs still
             # leaves the markets on DIFFERENT sides of the same matchup, which is all that check tests.

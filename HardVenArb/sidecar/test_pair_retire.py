@@ -126,7 +126,8 @@ check("record: kept, final kept, the token, the evidence",
 check("record: hours past the listed start", L and 1.9 < L[0]["hours_past_start"] < 2.1, L[:1])
 RL = run_log(path)
 check("one run record: held 1, kept 1", RL == [{"held": 1, "refilled": 0, "kept": 1, "cleared_later": 0,
-                                               "released": 0, "named": 0, "ended": 0, "names_kept": 0}], RL)
+                                               "released": 0, "named": 0, "ended": 0, "names_kept": 0,
+                                               "stale_live": 0}], RL)
 check("the run record shares the rows' timestamp, and comes first",
       _log_lines(path)[0].get("run") is not None and _log_lines(path)[0]["at"] == L[0]["at"], _log_lines(path)[:2])
 
@@ -157,7 +158,8 @@ check("the ending is logged: re-pointed at the live matchup, paired at the end o
       and EL[0]["final"] == "paired", EL)
 check("but a run record: the held row was re-filled", run_log(path) == [{"held": 1, "refilled": 1, "kept": 0,
                                                                          "cleared_later": 0, "released": 0,
-                                                                         "named": 0, "ended": 1, "names_kept": 0}], run_log(path))
+                                                                         "named": 0, "ended": 1, "names_kept": 0,
+                                                                         "stale_live": 0}], run_log(path))
 
 print("\n[3] the event re-pairs through its OTHER market -> the old row stays clear (no two matchups per event)")
 out, log, wrote, path = run([copy.deepcopy(GAV), copy.deepcopy(ABI)], OTHER + LIVE)
@@ -197,7 +199,8 @@ check("summary", "1 released by the 12h age cap" in log, log[-500:])
 L = kept_log(path)
 check("audit record: released with the reason", L and L[0]["decision"] == "released" and "past its listed start" in L[0]["reason"], L)
 check("run record counts the release", run_log(path) == [{"held": 1, "refilled": 0, "kept": 0, "cleared_later": 0,
-                                                           "released": 1, "named": 0, "ended": 0, "names_kept": 0}], run_log(path))
+                                                           "released": 1, "named": 0, "ended": 0, "names_kept": 0,
+                                                           "stale_live": 0}], run_log(path))
 
 print("\n[8] the cap is HARDVEN_PAIR_KEEP_MAX_H")
 os.environ["HARDVEN_PAIR_KEEP_MAX_H"] = "20"
@@ -317,7 +320,7 @@ import pair_auto as A  # noqa: E402
 REAL_GATE, REAL_FETCH = A.price_validate, A._fetch_implied
 try:
     def prices(home, away):
-        A._fetch_implied = lambda sidecar, tokens: {t: (home if t.endswith(":home") else away) for t in tokens}
+        A._fetch_implied = lambda sidecar, tokens, **kw: {t: (home if t.endswith(":home") else away) for t in tokens}
 
     prices(0.52, 0.52)
     out, log, wrote, path = run([dict(copy.deepcopy(ABI), kalshi_yes_price=0.49), copy.deepcopy(GAV)], OTHER + PRE,
@@ -351,6 +354,106 @@ try:
           "NAMES-KEEP" not in log and run_log(path)[0]["names_kept"] == 0, log[-600:])
 finally:
     A.price_validate, A._fetch_implied = REAL_GATE, REAL_FETCH
+
+print("\n[16] AN IN-PLAY PRICE FROZEN BY A SESSION BREAK (2026-11-18) is not judged. The REAL gate and the REAL /odds\n"
+      "     parse; only the sidecar's HTTP answer is stubbed (urlopen). The sidecar stamps ts=now while its feed is up\n"
+      "     and serves the stored ts once it is not, so 'age' below is how long the session has been closed.")
+import urllib.parse, urllib.request  # noqa: E402
+REAL_URLOPEN = urllib.request.urlopen
+
+
+class _Resp:
+    def __init__(self, data):
+        self._b = json.dumps(data).encode("utf-8")
+
+    def read(self):
+        return self._b
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def odds(yes_tok, no_tok, yes_p, live, age):
+    """GET /odds answers: the two tokens 'open' at yes_p / 1.04 - yes_p, in play or not, stamped `age` s ago."""
+    table = {yes_tok: yes_p, no_tok: round(1.04 - yes_p, 3)}
+
+    def _open(url, timeout=0):
+        asked = urllib.parse.parse_qs(urllib.parse.urlparse(url).query).get("selections", [""])[0].split(",")
+        now = time.time()
+        return _Resp({"selections": {t: {"selection_id": t, "implied_price": table[t], "status": "open",
+                                         "live": live, "ts": now - age} for t in asked if t in table}})
+    urllib.request.urlopen = _open
+
+
+P_YES, P_NO = ABI["hardven_yes_token"], ABI["hardven_no_token"]
+C_YES, C_NO = LIVE[0]["selection_id"], LIVE[1]["selection_id"]
+FAR = dict(copy.deepcopy(ABI), kalshi_yes_price=0.10)           # Kalshi 0.10 vs Pinnacle 0.85: 0.75 apart
+os.environ["HARDVEN_PRICE_GATE_RETRIES"] = "0"                  # no feed-waking waits inside a test
+try:
+    odds(P_YES, P_NO, 0.85, True, 900)                          # a break: in play, frozen 15 min ago
+    out, log, wrote, path = run([copy.deepcopy(FAR), copy.deepcopy(GAV)], OTHER + PRE, gate=REAL_GATE)
+    check("in play, frozen 15 min, venues 0.75 apart: the row STANDS", row(out, ABI["kalshi_ticker"]).get(
+        "hardven_yes_token") == P_YES, row(out, ABI["kalshi_ticker"]).get("hardven_yes_token"))
+    check("said so on the gate line, nothing rejected", "1 in-play row(s) left standing, Pinnacle's price frozen" in log
+          and "PRICE-REJECT" not in log, log[-700:])
+    check("run record: stale_live 1", run_log(path)[0].get("stale_live") == 1, run_log(path))
+
+    odds(P_YES, P_NO, 0.85, True, 1)                            # inside a window: stamped fresh
+    out, log, wrote, path = run([copy.deepcopy(FAR), copy.deepcopy(GAV)], OTHER + PRE, gate=REAL_GATE)
+    check("the same prices FRESH (a window): rejected as a wrong game, as before",
+          not row(out, ABI["kalshi_ticker"]).get("hardven_yes_token") and "PRICE-REJECT" in log
+          and run_log(path)[0].get("stale_live") == 0, log[-700:])
+
+    odds(P_YES, P_NO, 0.85, True, 45)                           # just closed: under the 60s default, still judged
+    out, log, wrote, path = run([copy.deepcopy(FAR), copy.deepcopy(GAV)], OTHER + PRE, gate=REAL_GATE)
+    check("in play, 45 s old (< HARDVEN_PRICE_GATE_LIVE_MAX_AGE_SEC 60): judged", "PRICE-REJECT" in log, log[-700:])
+
+    odds(P_YES, P_NO, 0.85, False, 900)                         # PRE-MATCH, frozen just as long
+    out, log, wrote, path = run([copy.deepcopy(FAR), copy.deepcopy(GAV)], OTHER + PRE, gate=REAL_GATE)
+    check("a PRE-MATCH price frozen as long is judged as before (rejected)",
+          not row(out, ABI["kalshi_ticker"]).get("hardven_yes_token") and "PRICE-REJECT" in log, log[-700:])
+
+    odds(C_YES, C_NO, 0.85, True, 900)                          # the 11-14/16/17 cases: kept, re-pointed in a break
+    out, log, wrote, path = run([dict(copy.deepcopy(FAR), hardven_kept_since=START), copy.deepcopy(GAV)], OTHER + LIVE,
+                                gate=REAL_GATE)
+    EL = ended_log(path)
+    check("a kept row re-pointed to its live match in a break stays paired on it",
+          row(out, ABI["kalshi_ticker"]).get("hardven_yes_token") == C_YES, row(out, ABI["kalshi_ticker"]).get("hardven_yes_token"))
+    check("its ending reads re-pointed -> paired (was: cleared later in this run)",
+          len(EL) == 1 and EL[0]["how"] == "re-pointed" and EL[0]["final"] == "paired", EL)
+
+    odds(C_YES, C_NO, 0.85, True, 1)                            # the same re-point inside a window
+    out, log, wrote, path = run([dict(copy.deepcopy(FAR), hardven_kept_since=START), copy.deepcopy(GAV)], OTHER + LIVE,
+                                gate=REAL_GATE)
+    EL = ended_log(path)
+    check("the same re-point with LIVE prices 0.75 apart is still judged and cleared",
+          len(EL) == 1 and EL[0]["final"].startswith("cleared"), EL)
+
+    os.environ["HARDVEN_PRICE_GATE_LIVE_MAX_AGE_SEC"] = "0"     # off = the old behaviour
+    odds(P_YES, P_NO, 0.85, True, 900)
+    out, log, wrote, path = run([copy.deepcopy(FAR), copy.deepcopy(GAV)], OTHER + PRE, gate=REAL_GATE)
+    check("HARDVEN_PRICE_GATE_LIVE_MAX_AGE_SEC=0 judges the frozen price (the old behaviour)",
+          "PRICE-REJECT" in log and run_log(path)[0].get("stale_live") == 0, log[-700:])
+    os.environ.pop("HARDVEN_PRICE_GATE_LIVE_MAX_AGE_SEC", None)
+
+    odds(P_YES, P_NO, 0.85, True, 900)                          # the other pairers pass no live_max_age
+    rows_ = [dict(copy.deepcopy(ABI), kalshi_yes_price=0.50)]   # 0.35 off either way -> a clean reject
+    with contextlib.redirect_stdout(io.StringIO()):
+        g = REAL_GATE(rows_, "http://127.0.0.1:9", 0.12)
+    check("pair_auto / pair_betinasia callers (no live_max_age) still judge it", g[2] == 1 and not rows_[0]["hardven_yes_token"], g)
+
+    os.environ["HARDVEN_PRICE_GATE_RETRIES"], os.environ["HARDVEN_PRICE_GATE_WAIT_SEC"] = "2", "0"
+    odds(P_YES, P_NO, 0.85, True, 900)
+    out, log, wrote, path = run([copy.deepcopy(FAR), copy.deepcopy(GAV)], OTHER + PRE, gate=REAL_GATE)
+    check("a board of frozen in-play prices does not read as a feed still waking (no waits)",
+          "still waking" not in log, log[-700:])
+finally:
+    urllib.request.urlopen = REAL_URLOPEN
+    for _k in ("HARDVEN_PRICE_GATE_RETRIES", "HARDVEN_PRICE_GATE_WAIT_SEC", "HARDVEN_PRICE_GATE_LIVE_MAX_AGE_SEC"):
+        os.environ.pop(_k, None)
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
