@@ -806,8 +806,13 @@ internal static class Program
         var statusTask = StatusLoopAsync(eval, feed, oracle, telemetry, snapshots, resolver, pairsPath, cts.Token);
         // The machine-sizing recorder, a separate low-priority process (see ResourceMonitor). Report = section 10b.
         var resourceTask = ResourceMonitor.RunAsync(cts.Token);
+        // IN-PLAY WATCH: silent unless Pinnacle is pricing a tennis match live that the bot is not seeing (InPlayWatch).
+        // Reads the SAME moneyline list the reload loop refreshes in place; asks only the local sidecar.
+        var inplayTask = InPlayWatch.Enabled
+            ? new InPlayWatch(sidecar, oracle, mlPairs, pairsPath, m => discord.AlertAsync(m)).RunAsync(cts.Token)
+            : Task.CompletedTask;
         await SafeAll(feedTask, oracleTask, evalTask, bankrollTask, snapTask, settleTask, reloadTask, followTask, statusTask,
-                      resourceTask);
+                      resourceTask, inplayTask);
         // Stopped while Kalshi was closed: record the closure up to now, so --resolve still sets its signals aside.
         eval.LiveExec?.CloseOpenClosure();
         evalD?.LiveExec?.CloseOpenClosure();

@@ -303,6 +303,93 @@ def _pick_game(games: list, entry: dict, time_tol_sec: float):
     return min(cands, key=_ddiff)
 
 
+_MONTHS = {m: i for i, m in enumerate(("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV",
+                                        "DEC"), 1)}
+
+
+def _ticker_day(ticker: str):
+    """The match date a Kalshi ticker carries (KXITFMATCH-26NOV18ABCDEF -> 2026-11-18 12:00, naive UTC), else None."""
+    m = re.search(r"-(\d{2})([A-Z]{3})(\d{2})", ticker or "")
+    if not m or m.group(2) not in _MONTHS:
+        return None
+    try:
+        return datetime(2000 + int(m.group(1)), _MONTHS[m.group(2)], int(m.group(3)), 12, 0)
+    except ValueError:
+        return None
+
+
+def _name_tokens(name: str) -> set:
+    return {w for w in re.sub(r"[^a-z ]", " ", _norm(name or "")).split() if len(w) >= 3}
+
+
+def board_misses(pairs: list, book: dict, filled_now: set, unmatched: list, released: set) -> list:
+    """TENNIS EVENTS PINNACLE'S BOARD LISTS THAT THIS RUN LEFT UNPAIRED (2026-11-18).
+
+    The EV bot can only see a match in play that the pair file holds, so a match Pinnacle lists and the pairer
+    misses is invisible downstream - the in-play watch (KalshiEvBot/InPlayWatch.cs) checks every PAIRED match, and
+    this is its other half. Independent of the matcher on purpose: a SURNAME check against the whole tennis board
+    (each Kalshi player's last name - the event title carries surnames - in a different one of the board game's
+    two names, start within 36h of the ticker's date), so a matcher bug cannot hide its own misses. Every event
+    with NO paired market at the end of the run (a 2-way fills one market by design) is checked; each hit is
+    returned with why the run left it: the matcher's own UNMATCHED reason, "paired then cleared later in this run"
+    (price gate / name audit / mirror check), or the 12h age cap. The bot alerts on these during a session."""
+    by_event: dict = {}
+    for e in pairs:
+        tk = e.get("kalshi_ticker") or ""
+        if "TENNIS" in {s.upper() for s in _expected_sports(tk)}:
+            by_event.setdefault(e.get("event_id") or tk, []).append(e)
+    idx: dict = {}
+    for games in book.values():
+        for g in games:
+            if (g.get("sport") or "").upper() != "TENNIS" or len(g.get("teams") or {}) != 2:
+                continue
+            for name in g["teams"]:
+                for t in _name_tokens(name):
+                    idx.setdefault(t, []).append(g)
+    why_by: dict = {}
+    for u in unmatched:
+        parts = u.split()
+        if parts:
+            why_by.setdefault(parts[0], u)
+    out = []
+    for ev, rows in by_event.items():
+        if any(r.get("hardven_yes_token") and r.get("hardven_no_token") for r in rows):
+            continue                                          # paired (or kept): the bot watches it
+        key = next((k for k in (kalshi_key(r) for r in rows) if k), None)
+        if not key or key[2] or len(key[1]) != 2:
+            continue
+        players = sorted(key[1])
+        sur = [(_norm(p).split() or [""])[-1] for p in players]
+        if not all(len(s) >= 3 for s in sur):
+            continue
+        day = next((d for d in (_ticker_day(r.get("kalshi_ticker") or "") for r in rows) if d), None)
+        cands, seen = [], set()
+        for g in idx.get(sur[0], []):
+            if id(g) in seen:
+                continue
+            seen.add(id(g))
+            toks = [_name_tokens(n) for n in g["teams"]]
+            if not ((sur[0] in toks[0] and sur[1] in toks[1]) or (sur[0] in toks[1] and sur[1] in toks[0])):
+                continue
+            st = _pin_dt(g.get("start") or "")
+            if day and st and abs((st - day).total_seconds()) > 36 * 3600:
+                continue
+            cands.append((abs((st - day).total_seconds()) if (day and st) else 0, g))
+        if not cands:
+            continue
+        g = min(cands, key=lambda c: c[0])[1]
+        tks = sorted(r.get("kalshi_ticker") or "" for r in rows)
+        why = ("paired by this run's matcher, then cleared later in it (price gate / name audit / mirror check)"
+               if any(t in filled_now for t in tks)
+               else "released by the 12h age cap" if any(t in released for t in tks)
+               else next((why_by[t] for t in tks if t in why_by), "not attempted by the matcher this run"))
+        out.append({"event_id": ev, "tickers": tks, "kalshi": rows[0].get("event_title") or "", "players": players,
+                    "board": {"token": next(iter(g["teams"].values())), "league": g.get("league_name") or "",
+                              "start": g.get("start") or "", "names": sorted(g["teams"])},
+                    "why": why})
+    return out
+
+
 def _sidecar_evidence(sidecar: str, sid: str, probe: dict, timeout: float = 3.0) -> dict:
     """What the running sidecar holds for a KEPT token right now (GET /debug/redirect, read-only): the old matchup
     as cached, its live replacement if linked, and where the in-play redirect would send the bot. {} when not
@@ -430,6 +517,7 @@ def main() -> None:
     except Exception as _ex:
         print("[PAIR] slate log skipped (%s: %s)" % (type(_ex).__name__, _ex))
     filled = already = skipped_dupe = fuzzy_n = anchor_rejected = 0
+    filled_now: set[str] = set()     # tickers this run's matcher filled (board_misses tells "cleared later" apart)
     mirror_conflicts: set[str] = set()
     unmatched: list[str] = []
     done_events: set[str] = set()   # 2-way mirror dedupe (per Kalshi event_id)
@@ -601,6 +689,7 @@ def main() -> None:
             event_resolution[ev_id] = (_game_id(yes_tok), yes_key, tk)
 
         e["hardven_yes_token"], e["hardven_no_token"] = yes_tok, no_tok
+        filled_now.add(tk)
         # The Pinnacle names this row actually resolved to. Downstream verification has had to infer the
         # side from Kalshi's event_title ordering, which is Kalshi's convention and says nothing about which
         # side Pinnacle calls home — so it could confirm a slip while the sides were inverted. Recording the
@@ -864,6 +953,20 @@ def main() -> None:
     kept_recs = [r for r, _ in kept_log if r["decision"] == "kept"]
     kept_note = (f" | kept {sum(1 for r in kept_recs if r.get('final') == 'kept')} unlisted row(s), released "
                  f"{released} (pair_kept.jsonl)" if kept_log else "")
+    # ── ON PINNACLE'S BOARD, LEFT UNPAIRED (2026-11-18) - the in-play watch's other half, see board_misses ──
+    try:                                       # best-effort: a monitor must never cost a pairing run
+        misses = board_misses(pairs, book, filled_now, unmatched,
+                              {rec["ticker"] for rec, _ in kept_log if rec["decision"] == "released"})
+    except Exception as ex:
+        misses = []
+        print(f"[PAIR] board-miss check skipped ({type(ex).__name__}: {ex})")
+    if misses:
+        print(f"\n[PAIR] *** {len(misses)} tennis event(s) ON PINNACLE'S BOARD were left UNPAIRED this run "
+              f"(pair_misses.jsonl; the EV bot alerts on them during a session): ***")
+        for m in misses:
+            print(f"         {m['event_id']}  {m['kalshi']}  <-> {' vs '.join(m['board']['names'])} "
+                  f"({m['board']['league']}, {m['board']['start']}) - {m['why']}")
+        kept_note += f" | {len(misses)} on Pinnacle's board left unpaired (pair_misses.jsonl)"
     if args.write and (filled or gate[1] or gate[2] or url_n or start_n or backfilled or repointed or stamped
                        or named or misoriented or retracted):
         atomic_write_json(args.pairs, pairs)   # atomic → the C# hot-reload never reads a partial cross_pairs.json
@@ -892,6 +995,12 @@ def main() -> None:
                 fh.write(json.dumps(run_rec) + "\n")
                 for rec, _e in kept_log:
                     fh.write(json.dumps(rec) + "\n")
+            # A run record EVERY run, then this run's misses with the same "at": the bot reads the LATEST run only,
+            # so a miss the next run pairs stops alerting, and a run with none says so.
+            with open(Path(args.pairs).with_name("pair_misses.jsonl"), "a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"at": now_iso, "run": {"misses": len(misses)}}) + "\n")
+                for m in misses:
+                    fh.write(json.dumps(dict(m, at=now_iso)) + "\n")
         except Exception as ex:
             print(f"[PAIR] kept-row log skipped ({type(ex).__name__}: {ex})")
 

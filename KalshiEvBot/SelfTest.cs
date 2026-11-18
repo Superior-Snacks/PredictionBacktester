@@ -1762,6 +1762,68 @@ public static class SelfTest
                   "KellyEdge falls with the corrections, like the stake");
         }
 
+        // ── In-play watch (2026-11-18): alert only when Pinnacle prices a match live the bot is not seeing ──────
+        Console.WriteLine("\nIn-play watch");
+        {
+            static System.Text.Json.JsonElement J(string s) => System.Text.Json.JsonDocument.Parse(s).RootElement.Clone();
+            const string cachedLive = "{\"id\":\"9:200:home\",\"live\":true,\"status\":\"open\",\"age_s\":4.0}";
+            Check(InPlayWatch.PinnacleLivePriced(J("{\"redirect_target\":" + cachedLive + "}"), 300) is string w1
+                  && w1.Contains("redirect target"), "the redirect target live + open + fresh = Pinnacle prices it live");
+            Check(InPlayWatch.PinnacleLivePriced(J("{\"parent\":" + cachedLive + "}"), 300) is string w2
+                  && w2.Contains("own token"), "the token itself live + open = priced live (then the bot should have it)");
+            Check(InPlayWatch.PinnacleLivePriced(J("{\"same_players_in_league\":[{\"mid\":\"9:201\",\"units\":\"Sets\","
+                  + "\"home_cached\":" + cachedLive + "}]}"), 300) is string w3 && w3.Contains("9:201"),
+                  "a live listing with the same two players, not followed by the redirect = priced live");
+            Check(InPlayWatch.PinnacleLivePriced(J("{\"same_players_in_league\":[{\"mid\":\"9:202\",\"units\":\"Games\","
+                  + "\"home_cached\":" + cachedLive + "}]}"), 300) is null,
+                  "a '(Games)' twin is not the match price - not counted");
+            Check(InPlayWatch.PinnacleLivePriced(J("{\"redirect_target\":{\"id\":\"x\",\"live\":true,\"status\":\"suspended\",\"age_s\":2}}"), 300) is null,
+                  "live but SUSPENDED = not priced (nothing to see right now)");
+            Check(InPlayWatch.PinnacleLivePriced(J("{\"redirect_target\":{\"id\":\"x\",\"live\":true,\"status\":\"open\",\"age_s\":900}}"), 300) is null,
+                  "live + open but last pushed 15 min ago = stale, not priced");
+            Check(InPlayWatch.PinnacleLivePriced(J("{\"parent\":{\"id\":\"x\",\"live\":false,\"status\":\"open\",\"age_s\":1}}"), 300) is null,
+                  "an open PRE-MATCH price is not in play");
+            Check(InPlayWatch.PinnacleLivePriced(J("{\"parent\":null,\"redirect\":null,\"redirect_target\":null}"), 300) is null,
+                  "nothing cached = Pinnacle not pricing it live (the ITF live listing with no markets stays silent)");
+
+            var t0 = new DateTime(2026, 11, 18, 12, 0, 0, DateTimeKind.Utc);
+            var tr = new InPlayWatch.Track();
+            var after = TimeSpan.FromMinutes(3);
+            Check(InPlayWatch.Step(tr, InPlayWatch.State.Miss, t0, after) == InPlayWatch.Act.None, "a fresh miss is not alerted");
+            Check(InPlayWatch.Step(tr, InPlayWatch.State.Miss, t0.AddMinutes(2), after) == InPlayWatch.Act.None, "2 min in: still quiet");
+            Check(InPlayWatch.Step(tr, InPlayWatch.State.Miss, t0.AddMinutes(3), after) == InPlayWatch.Act.Alert, "3 min in: ONE alert");
+            Check(InPlayWatch.Step(tr, InPlayWatch.State.Miss, t0.AddMinutes(4), after) == InPlayWatch.Act.None, "and only one");
+            Check(InPlayWatch.Step(tr, InPlayWatch.State.Seen, t0.AddMinutes(6), after) == InPlayWatch.Act.Recovered, "seen again: resolved once");
+            Check(InPlayWatch.Step(tr, InPlayWatch.State.Miss, t0.AddMinutes(7), after) == InPlayWatch.Act.None
+                  && InPlayWatch.Step(tr, InPlayWatch.State.Miss, t0.AddMinutes(11), after) == InPlayWatch.Act.None,
+                  "a second episode of the same match is logged, not re-alerted");
+            var tr2 = new InPlayWatch.Track();
+            InPlayWatch.Step(tr2, InPlayWatch.State.Miss, t0, after);
+            InPlayWatch.Step(tr2, InPlayWatch.State.NoLivePrice, t0.AddMinutes(2), after);
+            Check(InPlayWatch.Step(tr2, InPlayWatch.State.Miss, t0.AddMinutes(3), after) == InPlayWatch.Act.None
+                  && InPlayWatch.Step(tr2, InPlayWatch.State.Miss, t0.AddMinutes(6), after) == InPlayWatch.Act.Alert,
+                  "a break in the miss restarts its clock");
+            var tr3 = new InPlayWatch.Track();
+            InPlayWatch.Step(tr3, InPlayWatch.State.Miss, t0, after);
+            Check(InPlayWatch.Step(tr3, InPlayWatch.State.NoLivePrice, t0.AddMinutes(1), after) == InPlayWatch.Act.None
+                  && !tr3.Alerted, "a match Pinnacle stops pricing (it ended) is no alert and no 'resolved'");
+
+            var lines = new[]
+            {
+                "{\"at\":\"2026-11-18T10:24:00Z\",\"run\":{\"misses\":1}}",
+                "{\"at\":\"2026-11-18T10:24:00Z\",\"event_id\":\"OLD\",\"board\":{\"token\":\"1:2:home\"}}",
+                "{\"at\":\"2026-11-18T11:55:00Z\",\"run\":{\"misses\":1}}",
+                "{\"at\":\"2026-11-18T11:55:00Z\",\"event_id\":\"NEW\",\"board\":{\"token\":\"1:3:home\"}}",
+                "not json",
+            };
+            var latest = InPlayWatch.LatestMisses(lines, out var runAt);
+            Check(latest.Count == 1 && latest[0].GetProperty("event_id").GetString() == "NEW"
+                  && runAt == new DateTime(2026, 11, 18, 11, 55, 0, DateTimeKind.Utc),
+                  "pair_misses.jsonl: only the LATEST run's misses count");
+            var none = InPlayWatch.LatestMisses(lines.Append("{\"at\":\"2026-11-18T13:26:00Z\",\"run\":{\"misses\":0}}"), out _);
+            Check(none.Count == 0, "a later run that left nothing unpaired clears them");
+        }
+
         Console.WriteLine();
         Console.WriteLine($"{_pass} passed, {_fail} failed.");
         return _fail == 0 ? 0 : 1;

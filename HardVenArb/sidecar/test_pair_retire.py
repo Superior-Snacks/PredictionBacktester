@@ -455,5 +455,70 @@ finally:
     for _k in ("HARDVEN_PRICE_GATE_RETRIES", "HARDVEN_PRICE_GATE_WAIT_SEC", "HARDVEN_PRICE_GATE_LIVE_MAX_AGE_SEC"):
         os.environ.pop(_k, None)
 
+print("\n[17] ON PINNACLE'S BOARD, LEFT UNPAIRED (2026-11-18): board_misses, the in-play watch's other half - a surname\n"
+      "     check against the whole tennis board, independent of the matcher. Pure cases, then one REAL run.")
+TCODE = NOW.strftime("%y%b%d").upper()                          # today's ticker date, e.g. 26NOV18
+
+
+def ev_rows(code=TCODE, title="Abibsi vs Gavrielides", series="KXITFMATCH", paired=False):
+    evid = f"{series}-{code}ABIGAV"
+    rows = [{"kalshi_ticker": f"{evid}-ABI", "event_id": evid, "event_title": title, "kalshi_outcome": "Mohamed Ali Abibsi",
+             "hardven_yes_token": "", "hardven_no_token": ""},
+            {"kalshi_ticker": f"{evid}-GAV", "event_id": evid, "event_title": title, "kalshi_outcome": "Liam Gavrielides",
+             "hardven_yes_token": "", "hardven_no_token": ""}]
+    if paired:
+        rows[0].update(hardven_yes_token=PRE[0]["selection_id"], hardven_no_token=PRE[1]["selection_id"])
+    return rows
+
+
+BOOK = P.index_catalog(OTHER + PRE)
+R0 = ev_rows()
+m = P.board_misses(R0, BOOK, set(), [f"{R0[0]['kalshi_ticker']}  ['abibsi', 'gavrielides'] (best leg 60 — not on "
+                                     f"Pinnacle's board)"], set())
+check("unpaired while the board lists both players -> ONE miss, with the matcher's own reason",
+      len(m) == 1 and "best leg 60" in m[0]["why"] and m[0]["event_id"] == R0[0]["event_id"], m)
+check("  it carries the board listing: token, names, league, start",
+      m and m[0]["board"]["token"] in (PRE[0]["selection_id"], PRE[1]["selection_id"])
+      and m[0]["board"]["names"] == sorted(["mohamed ali abibsi", "liam gavrielides"])
+      and m[0]["board"]["league"] == "ITF Men Monastir - R16" and m[0]["board"]["start"] == START, m)
+check("a PAIRED event is not a miss (one market paired is enough)",
+      P.board_misses(ev_rows(paired=True), BOOK, set(), [], set()) == [])
+check("an event NOT on the board is not a miss (Pinnacle does not list it - nothing to see)",
+      P.board_misses(ev_rows(), P.index_catalog(OTHER), set(), [], set()) == [])
+m = P.board_misses(ev_rows(), BOOK, {ev_rows()[0]["kalshi_ticker"]}, [], set())
+check("filled by this run's matcher, then cleared -> says so",
+      len(m) == 1 and m[0]["why"].startswith("paired by this run's matcher"), m)
+m = P.board_misses(ev_rows(), BOOK, set(), [], {ev_rows()[1]["kalshi_ticker"]})
+check("released by the age cap -> says so", len(m) == 1 and m[0]["why"] == "released by the 12h age cap", m)
+check("the board game 5 days from the ticker's date is a different match -> not a miss",
+      P.board_misses(ev_rows(code=(NOW - dt.timedelta(days=5)).strftime("%y%b%d").upper()), BOOK, set(), [], set()) == [])
+check("only one of the two surnames on a board game -> not a miss",
+      P.board_misses(ev_rows(title="Abibsi vs Svoboda"), BOOK, set(), [], set()) == [])
+check("the title in the other order still finds it",
+      len(P.board_misses(ev_rows(title="Gavrielides vs Abibsi"), BOOK, set(), [], set())) == 1)
+check("not a tennis series -> not checked", P.board_misses(ev_rows(series="KXNBAGAME"), BOOK, set(), [], set()) == [])
+
+os.environ["HARDVEN_PRICE_GATE_RETRIES"] = "0"
+try:
+    TODAY_ABI = dict(copy.deepcopy(ABI), kalshi_ticker=f"KXITFMATCH-{TCODE}ABIGAV-ABI", event_id=f"KXITFMATCH-{TCODE}ABIGAV",
+                     kalshi_yes_price=0.10)
+    TODAY_GAV = dict(copy.deepcopy(GAV), kalshi_ticker=f"KXITFMATCH-{TCODE}ABIGAV-GAV", event_id=f"KXITFMATCH-{TCODE}ABIGAV")
+    odds(P_YES, P_NO, 0.85, True, 1)                            # LIVE prices 0.75 apart: the gate rejects it
+    out, log, wrote, path = run([TODAY_ABI, TODAY_GAV], OTHER + PRE, gate=REAL_GATE)
+    ML = [json.loads(l) for l in Path(path).with_name("pair_misses.jsonl").read_text(encoding="utf-8").splitlines()]
+    check("REAL run: the gate cleared the only pairing -> pair_misses.jsonl has the run record and the miss",
+          len(ML) == 2 and ML[0].get("run") == {"misses": 1} and ML[1]["event_id"] == TODAY_ABI["event_id"]
+          and ML[1]["at"] == ML[0]["at"] and ML[1]["why"].startswith("paired by this run's matcher"), ML)
+    check("  and the run's last line says so (the scheduler logs only that line)",
+          log.strip().splitlines()[-1].endswith("| 1 on Pinnacle's board left unpaired (pair_misses.jsonl)"),
+          log.strip().splitlines()[-1])
+    odds(P_YES, P_NO, 0.09, True, 1)                            # the venues agree: paired, nothing to report
+    out, log, wrote, path = run([dict(TODAY_ABI), dict(TODAY_GAV)], OTHER + PRE, gate=REAL_GATE)
+    ML = [json.loads(l) for l in Path(path).with_name("pair_misses.jsonl").read_text(encoding="utf-8").splitlines()]
+    check("REAL run, paired: a run record with misses 0 and nothing else", ML == [{"at": ML[0]["at"], "run": {"misses": 0}}], ML)
+finally:
+    urllib.request.urlopen = REAL_URLOPEN
+    os.environ.pop("HARDVEN_PRICE_GATE_RETRIES", None)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
