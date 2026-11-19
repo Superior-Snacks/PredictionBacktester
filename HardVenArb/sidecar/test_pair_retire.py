@@ -127,7 +127,7 @@ check("record: hours past the listed start", L and 1.9 < L[0]["hours_past_start"
 RL = run_log(path)
 check("one run record: held 1, kept 1", RL == [{"held": 1, "refilled": 0, "kept": 1, "cleared_later": 0,
                                                "released": 0, "named": 0, "ended": 0, "names_kept": 0,
-                                               "stale_live": 0}], RL)
+                                               "stale_live": 0, "kalshi_paused": False}], RL)
 check("the run record shares the rows' timestamp, and comes first",
       _log_lines(path)[0].get("run") is not None and _log_lines(path)[0]["at"] == L[0]["at"], _log_lines(path)[:2])
 
@@ -159,7 +159,7 @@ check("the ending is logged: re-pointed at the live matchup, paired at the end o
 check("but a run record: the held row was re-filled", run_log(path) == [{"held": 1, "refilled": 1, "kept": 0,
                                                                          "cleared_later": 0, "released": 0,
                                                                          "named": 0, "ended": 1, "names_kept": 0,
-                                                                         "stale_live": 0}], run_log(path))
+                                                                         "stale_live": 0, "kalshi_paused": False}], run_log(path))
 
 print("\n[3] the event re-pairs through its OTHER market -> the old row stays clear (no two matchups per event)")
 out, log, wrote, path = run([copy.deepcopy(GAV), copy.deepcopy(ABI)], OTHER + LIVE)
@@ -200,7 +200,7 @@ L = kept_log(path)
 check("audit record: released with the reason", L and L[0]["decision"] == "released" and "past its listed start" in L[0]["reason"], L)
 check("run record counts the release", run_log(path) == [{"held": 1, "refilled": 0, "kept": 0, "cleared_later": 0,
                                                            "released": 1, "named": 0, "ended": 0, "names_kept": 0,
-                                                           "stale_live": 0}], run_log(path))
+                                                           "stale_live": 0, "kalshi_paused": False}], run_log(path))
 
 print("\n[8] the cap is HARDVEN_PAIR_KEEP_MAX_H")
 os.environ["HARDVEN_PAIR_KEEP_MAX_H"] = "20"
@@ -516,6 +516,62 @@ try:
     out, log, wrote, path = run([dict(TODAY_ABI), dict(TODAY_GAV)], OTHER + PRE, gate=REAL_GATE)
     ML = [json.loads(l) for l in Path(path).with_name("pair_misses.jsonl").read_text(encoding="utf-8").splitlines()]
     check("REAL run, paired: a run record with misses 0 and nothing else", ML == [{"at": ML[0]["at"], "run": {"misses": 0}}], ML)
+finally:
+    urllib.request.urlopen = REAL_URLOPEN
+    os.environ.pop("HARDVEN_PRICE_GATE_RETRIES", None)
+
+print("\n[18] KALSHI'S PRICE FROZEN BY ITS OWN HALT (2026-11-19): the scaffold read Kalshi in its weekly maintenance (rows\n"
+      "     carry kalshi_paused), so no IN-PLAY row is judged, however fresh Pinnacle's price is. The real 08:31 case:\n"
+      "     Kalshi's last trade before the halt 0.32 vs Pinnacle's live 0.60 after 30 min of play (tol 0.25).")
+os.environ["HARDVEN_PRICE_GATE_RETRIES"] = "0"
+try:
+    HALT = dict(copy.deepcopy(ABI), kalshi_yes_price=0.32)
+    halted = lambda: [dict(copy.deepcopy(HALT), kalshi_paused=True), dict(copy.deepcopy(GAV), kalshi_paused=True)]
+    odds(P_YES, P_NO, 0.60, True, 1)                            # in play, Pinnacle FRESH (inside a window)
+    out, log, wrote, path = run([copy.deepcopy(HALT), copy.deepcopy(GAV)], OTHER + PRE, gate=REAL_GATE)
+    check("the 08:31 case WITHOUT the flag: rejected as a wrong game (what unpaired EFSKRA)",
+          not row(out, ABI["kalshi_ticker"]).get("hardven_yes_token") and "PRICE-REJECT" in log
+          and run_log(path)[0].get("kalshi_paused") is False, log[-700:])
+
+    out, log, wrote, path = run(halted(), OTHER + PRE, gate=REAL_GATE)
+    check("the same prices, Kalshi read in a halt: the in-play row STANDS",
+          row(out, ABI["kalshi_ticker"]).get("hardven_yes_token") == P_YES, row(out, ABI["kalshi_ticker"]).get("hardven_yes_token"))
+    check("  said so on the gate line, nothing rejected, no 'feed still waking' warning",
+          "1 in-play row(s) left standing, Kalshi's trading paused" in log and "PRICE-REJECT" not in log
+          and "STILL only" not in log, log[-700:])
+    check("  run record: stale_live 1, kalshi_paused true",
+          run_log(path)[0].get("stale_live") == 1 and run_log(path)[0].get("kalshi_paused") is True, run_log(path))
+
+    odds(P_YES, P_NO, 0.30, True, 1)                            # in play, the venues agree
+    out, log, wrote, path = run(halted(), OTHER + PRE, gate=REAL_GATE)
+    check("agreeing in-play prices in a halt: stand too (unjudged, never swapped)",
+          row(out, ABI["kalshi_ticker"]).get("hardven_yes_token") == P_YES and "PRICE-REJECT" not in log, log[-700:])
+
+    odds(P_YES, P_NO, 0.60, False, 1)                           # PRE-MATCH in the same halt
+    out, log, wrote, path = run(halted(), OTHER + PRE, gate=REAL_GATE)
+    check("a PRE-MATCH row in the halt is judged as before (rejected)",
+          not row(out, ABI["kalshi_ticker"]).get("hardven_yes_token") and "PRICE-REJECT" in log
+          and run_log(path)[0].get("stale_live") == 0, log[-700:])
+
+    odds(P_YES, P_NO, 0.60, True, 1)                            # the other pairers' path: no live_max_age at all
+    rows_ = [dict(copy.deepcopy(ABI), kalshi_yes_price=0.32)]
+    with contextlib.redirect_stdout(io.StringIO()):
+        g = REAL_GATE(rows_, "http://127.0.0.1:9", 0.25, kalshi_paused=True)
+    check("price_validate(kalshi_paused=True) without live_max_age: stands, counted unvalidated",
+          g == (0, 0, 0, 1) and rows_[0]["hardven_yes_token"] == P_YES, g)
+    with contextlib.redirect_stdout(io.StringIO()):
+        g = REAL_GATE([dict(copy.deepcopy(ABI), kalshi_yes_price=0.32)], "http://127.0.0.1:9", 0.25)
+    check("  and the default (kalshi_paused False) still judges it (no names here: swapped, for the audit to blank)",
+          g[3] == 0 and g[1] + g[2] == 1, g)
+
+    T_ABI = dict(copy.deepcopy(HALT), kalshi_ticker=f"KXITFMATCH-{TCODE}ABIGAV-ABI", event_id=f"KXITFMATCH-{TCODE}ABIGAV",
+                 kalshi_paused=True)
+    T_GAV = dict(copy.deepcopy(GAV), kalshi_ticker=f"KXITFMATCH-{TCODE}ABIGAV-GAV", event_id=f"KXITFMATCH-{TCODE}ABIGAV",
+                 kalshi_paused=True)
+    out, log, wrote, path = run([T_ABI, T_GAV], OTHER + PRE, gate=REAL_GATE)
+    ML = [json.loads(l) for l in Path(path).with_name("pair_misses.jsonl").read_text(encoding="utf-8").splitlines()]
+    check("REAL run in a halt: nothing left unpaired, so the in-play watch has nothing to flag",
+          ML == [{"at": ML[0]["at"], "run": {"misses": 0}}], ML)
 finally:
     urllib.request.urlopen = REAL_URLOPEN
     os.environ.pop("HARDVEN_PRICE_GATE_RETRIES", None)

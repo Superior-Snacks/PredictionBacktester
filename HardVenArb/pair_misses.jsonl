@@ -1,0 +1,17 @@
+{"at": "2026-11-18T17:20:17Z", "run": {"misses": 0}}
+{"at": "2026-11-18T18:51:32Z", "run": {"misses": 0}}
+{"at": "2026-11-18T20:22:55Z", "run": {"misses": 1}}
+{"event_id": "KXITFWMATCH-26NOV19SERSTR", "tickers": ["KXITFWMATCH-26NOV19SERSTR-SER", "KXITFWMATCH-26NOV19SERSTR-STR"], "kalshi": "Serban vs Struplova", "players": ["serban", "struplova"], "board": {"token": "207156:1640689154:home", "league": "ITF Women Heraklion - R16", "start": "2026-11-19T08:30:00Z", "names": ["julie struplova", "raluca georgiana serban"]}, "why": "paired by this run's matcher, then cleared later in it (price gate / name audit / mirror check)", "at": "2026-11-18T20:22:55Z"}
+{"at": "2026-11-18T21:54:09Z", "run": {"misses": 0}}
+{"at": "2026-11-18T23:25:20Z", "run": {"misses": 0}}
+{"at": "2026-11-19T00:56:25Z", "run": {"misses": 0}}
+{"at": "2026-11-19T02:27:40Z", "run": {"misses": 0}}
+{"at": "2026-11-19T03:58:40Z", "run": {"misses": 0}}
+{"at": "2026-11-19T05:29:39Z", "run": {"misses": 0}}
+{"at": "2026-11-19T07:00:35Z", "run": {"misses": 0}}
+{"at": "2026-11-19T08:31:32Z", "run": {"misses": 3}}
+{"event_id": "KXITFMATCH-26NOV19EFSKRA", "tickers": ["KXITFMATCH-26NOV19EFSKRA-EFS", "KXITFMATCH-26NOV19EFSKRA-KRA"], "kalshi": "Efstathiou vs Kravchenko", "players": ["efstathiou", "kravchenko"], "board": {"token": "210595:1640689153:home", "league": "ITF Men Heraklion - R16", "start": "2026-11-19T07:42:33Z", "names": ["georgii kravchenko", "melios efstathiou"]}, "why": "paired by this run's matcher, then cleared later in it (price gate / name audit / mirror check)", "at": "2026-11-19T08:31:32Z"}
+{"event_id": "KXITFMATCH-26NOV19KRUGAN", "tickers": ["KXITFMATCH-26NOV19KRUGAN-GAN", "KXITFMATCH-26NOV19KRUGAN-KRU"], "kalshi": "Krutykh vs Gannon", "players": ["gannon", "krutykh"], "board": {"token": "210595:1640689051:home", "league": "ITF Men Heraklion - R16", "start": "2026-11-19T07:45:05Z", "names": ["conor gannon", "oleksii krutykh"]}, "why": "paired by this run's matcher, then cleared later in it (price gate / name audit / mirror check)", "at": "2026-11-19T08:31:32Z"}
+{"event_id": "KXITFMATCH-26NOV19MILMAS", "tickers": ["KXITFMATCH-26NOV19MILMAS-MAS", "KXITFMATCH-26NOV19MILMAS-MIL"], "kalshi": "Milev vs Mashtakov", "players": ["mashtakov", "milev"], "board": {"token": "210595:1640689152:home", "league": "ITF Men Heraklion - R16", "start": "2026-11-19T07:46:40Z", "names": ["nikita mashtakov", "yanaki milev"]}, "why": "paired by this run's matcher, then cleared later in it (price gate / name audit / mirror check)", "at": "2026-11-19T08:31:32Z"}
+{"at": "2026-11-19T10:02:53Z", "run": {"misses": 0}}
+{"at": "2026-11-19T11:34:07Z", "run": {"misses": 0}}

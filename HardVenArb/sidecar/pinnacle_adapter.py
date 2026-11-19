@@ -1036,7 +1036,9 @@ class PinnacleAdapter(BookAdapter):
                 # sidecar/live_curve.json instead of listed starts - see build_blocks / live_curve.py.
                 objective=os.environ.get("PINNACLE_BLOCK_OBJECTIVE", "starts"),
                 # in-play only: each live minute at its clock hour's measured value (hour_value.py). Unset = off.
-                weights_path=os.environ.get("PINNACLE_BLOCK_WEIGHTS") or None)
+                weights_path=os.environ.get("PINNACLE_BLOCK_WEIGHTS") or None,
+                # in-play only: Kalshi's Thursday halt is worth zero, so its hours go elsewhere (2026-11-19).
+                skip_kalshi_maint=os.environ.get("PINNACLE_BLOCK_SKIP_KALSHI_MAINT", "1") != "0")
             self._blocks_task = asyncio.create_task(self._blocks.run())
             _bs = self._blocks.status()
             try:

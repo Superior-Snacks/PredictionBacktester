@@ -353,7 +353,8 @@ def main() -> None:
                   f"named from the sidecar {r.get('named', 0)}"
                   + (f", endings logged {r['ended']}" if "ended" in r else "")
                   + (f" | near-even rows kept on their named side {r['names_kept']}" if "names_kept" in r else "")
-                  + (f" | in-play left standing (frozen price) {r['stale_live']}" if r.get("stale_live") else ""))
+                  + (f" | in-play left standing (frozen price) {r['stale_live']}" if r.get("stale_live") else "")
+                  + (" | Kalshi read in a trading halt" if r.get("kalshi_paused") else ""))
     print("\n   vs start = hours from the listed start at the latest run (negative = still before it)")
     print("   market                              kept since    vs start  runs  end                       in-play rows (from)   |P-ask|  |(1-P)-ask|")
     for e in sorted(eps, key=lambda e: e["kept_since"]):

@@ -408,14 +408,18 @@ def _pick_game(games: list, entry: dict, time_tol_sec: float):
     return min(cands, key=_ddiff)
 
 
-def _fetch_implied(sidecar: str, tokens: set, live_max_age: float | None = None, stale: set | None = None) -> dict:
+def _fetch_implied(sidecar: str, tokens: set, live_max_age: float | None = None, stale: set | None = None,
+                   skip_live: bool = False) -> dict:
     """{selection_id: implied_price} for OPEN book selections, via the sidecar /odds (one batched call).
 
     `live_max_age` (pair_pinnacle, 2026-11-18): an IN-PLAY selection whose quote is older than this many seconds is
     left out, and its id added to `stale`. The Pinnacle sidecar stamps ts=now on every token while its feed is up
     and serves the stored ts once it is not (session break, logout), so an old in-play ts is a price FROZEN when the
     session closed - and an in-play price moves too far in minutes to hold anything against. None = every open
-    selection, as before (the other pairers)."""
+    selection, as before (the other pairers).
+
+    `skip_live` (pair_pinnacle, 2026-11-19): EVERY in-play selection is left out the same way, whatever its age - the
+    frozen side is then KALSHI's (its trading paused, see pairHard.kalshi_trading_paused)."""
     if not tokens:
         return {}
     try:
@@ -430,12 +434,12 @@ def _fetch_implied(sidecar: str, tokens: set, live_max_age: float | None = None,
     for sid, s in (data.get("selections") or {}).items():
         ip = s.get("implied_price")
         if s.get("status") == "open" and ip:
-            if live_max_age is not None and s.get("live"):
+            if s.get("live") and (skip_live or live_max_age is not None):
                 try:
                     age = now - float(s.get("ts") or 0.0)
                 except (TypeError, ValueError):
                     age = float("inf")
-                if age > live_max_age:
+                if skip_live or age > live_max_age:
                     if stale is not None:
                         stale.add(sid)
                     continue
@@ -555,7 +559,7 @@ def duplicate_token_validate(pairs: list[dict]) -> tuple:
 
 def price_validate(pairs: list[dict], sidecar: str, tol: float, keep_side: set | None = None,
                    kept_out: list | None = None, live_max_age: float | None = None,
-                   stale_out: list | None = None) -> tuple:
+                   stale_out: list | None = None, kalshi_paused: bool = False) -> tuple:
     """PRICE-CONSISTENCY GATE. For each filled pair, the Kalshi-YES probability (kalshi_yes_price, from
     pairHard) and the bookmaker yes-token's implied prob must AGREE on the favorite — both are P(the same
     team). If they're COMPLEMENTS (book ≈ 1 − kalshi) the two sides are inverted → swap the tokens. If
@@ -584,10 +588,18 @@ def price_validate(pairs: list[dict], sidecar: str, tol: float, keep_side: set |
     just re-pointed to their live match and 2 ordinary ones. All were right; 4 of those matches were still being
     played when the session came back and went unpriced to the end (~165 in-play minutes). Inside a window every
     price is stamped fresh, so this changes nothing there; pre-match rows are judged as before (a pre-match price
-    barely moves in a break). See _fetch_implied."""
+    barely moves in a break). See _fetch_implied.
+
+    `kalshi_paused` (pair_pinnacle, 2026-11-19): the mirror image - Kalshi's prices were read while its trading was
+    paused (weekly maintenance), so its side is the frozen one. No in-play row is judged, however fresh Pinnacle's
+    price: each stands, counted unvalidated, its ticker appended to `stale_out`. The 08:31 run of 11-19 had cleared
+    3 in-play tennis rows as "wrong game" on Kalshi's last trade before the halt, 0.26-0.37 off Pinnacle's live
+    price after 30 min of play. Pre-match rows are judged as before."""
     tokens = {e[k] for e in pairs for k in ("hardven_yes_token", "hardven_no_token") if e.get(k)}
     stale: set = set()
-    fkw = {} if live_max_age is None else {"live_max_age": live_max_age, "stale": stale}
+    fkw = {}
+    if live_max_age is not None or kalshi_paused:
+        fkw = {"live_max_age": live_max_age, "stale": stale, "skip_live": kalshi_paused}
 
     # WAIT FOR PRICES — THE FIRST FETCH IS WHAT WAKES THE FEED.
     #
@@ -616,7 +628,7 @@ def price_validate(pairs: list[dict], sidecar: str, tol: float, keep_side: set |
         stale.clear()
         implied = _fetch_implied(sidecar, tokens, **fkw)
         _tries -= 1
-    if len(implied) < _want:
+    if len(implied) + len(stale) < _want:              # (in-play prices left out on purpose are not missing)
         print(f"[PAIR] price gate: STILL only {len(implied)}/{len(tokens)} token(s) priced. Three-way pairs "
               f"that cannot be checked will be marked `price_unvalidated` and the EV bot will skip them — "
               f"a swapped 1X2 passes every other check, so an unchecked one is not safe to trade.")

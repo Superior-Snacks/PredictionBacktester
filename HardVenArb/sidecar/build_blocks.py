@@ -37,6 +37,7 @@ from typing import NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import schedule as sched                                   # noqa: E402  (path set immediately above)
+import kalshi_hours                                        # noqa: E402
 
 
 class Block(NamedTuple):
@@ -135,31 +136,53 @@ def load_weights(path=None):
         return None
 
 
-def _live_value(times, curve, weights, lo, hi):
+# -- dead time: Kalshi's weekly maintenance (2026-11-19) ---------------------------------------------------------
+# The EV bot cannot trade while Kalshi is halted (Thursdays 03:00-05:00 New York, see kalshi_hours), so a live minute
+# there is worth nothing - 11-19's 06:00 plan opened 07:45-12:45 and spent two of those five hours in the halt.
+# `dead` = (lo, hi) minute ranges on the plan's scale whose value is ZERO: the optimiser then puts the budget at the
+# next-best hours, and a block may still straddle the halt only where that beats every alternative.
+def kalshi_dead_minutes(midnight, span_min, local_tz=None):
+    """Kalshi's maintenance as (lo, hi) minutes from the plan's naive LOCAL `midnight`, clipped to [0, span_min)."""
+    out = []
+    for a, b in kalshi_hours.windows(midnight, midnight + dt.timedelta(minutes=span_min), local_tz):
+        lo = max(0, int((a - midnight).total_seconds() // 60))
+        hi = min(span_min, int((b - midnight).total_seconds() // 60))
+        if hi > lo:
+            out.append((lo, hi))
+    return out
+
+
+def _live_value(times, curve, weights, lo, hi, dead=None):
     """Prefix sums of expected live VALUE per minute on [lo, hi): over every listed start, P(live) at that minute
-    times the weight of the clock hour it falls in. A window [a, b) is then worth S[b - lo] - S[a - lo]."""
+    times the weight of the clock hour it falls in (zero inside `dead`). A window [a, b) is then worth
+    S[b - lo] - S[a - lo]."""
     step, p = curve
     span = len(p) * step
     dens = [0.0] * max(hi - lo, 0)
     for t in times:
         for m in range(max(lo, t), min(hi, t + span)):
             dens[m - lo] += p[(m - t) // step]
+    for a, b in dead or ():
+        for m in range(max(a, lo), min(b, hi)):
+            dens[m - lo] = 0.0
     out = [0.0]
     for i, d in enumerate(dens):
         out.append(out[-1] + d * weights[((lo + i) // 60) % 24])
     return out
 
 
-def expected_live(times, blocks, curve, jitter_min=0, weights=None):
+def expected_live(times, blocks, curve, jitter_min=0, weights=None, dead=None):
     """Expected live minutes `blocks` hold for matches LISTED at `times` (minutes from the plan's local midnight).
-    With `weights`, each minute counts at its clock hour's weight instead of 1."""
+    With `weights`, each minute counts at its clock hour's weight instead of 1; minutes inside `dead` count 0."""
+    if dead and weights is None:
+        weights = [1.0] * 24                               # the per-minute path is the one that can zero minutes
     if weights is not None:
         spans = [(b.open_min + jitter_min, b.close_min - jitter_min) for b in blocks]
         spans = [(a, b) for a, b in spans if b > a]
         if not spans:
             return 0.0
         lo, hi = min(a for a, _ in spans), max(b for _, b in spans)
-        s = _live_value(times, curve, weights, lo, hi)
+        s = _live_value(times, curve, weights, lo, hi, dead)
         return sum(s[b - lo] - s[a - lo] for a, b in spans)
     c = _cum_live(curve)
     top = len(c) - 1
@@ -169,7 +192,7 @@ def expected_live(times, blocks, curve, jitter_min=0, weights=None):
 
 # -- the optimiser ------------------------------------------------------------------------------------------
 def optimise(starts, budget_min, min_gap_min, jitter_min, earliest_min, latest_min, now_min,
-             min_len=60, max_len=300, objective="starts", curve=None, weights=None, times=None):
+             min_len=60, max_len=300, objective="starts", curve=None, weights=None, times=None, dead=None):
     """Pick non-overlapping windows maximising coverage, subject to a total-minutes budget.
 
     Coverage is covered STARTS by default, or expected LIVE minutes with objective="inplay" and a curve (see
@@ -179,6 +202,7 @@ def optimise(starts, budget_min, min_gap_min, jitter_min, earliest_min, latest_m
     `weights` (in-play only) values each live minute at its clock hour's weight; without them the scoring is
     exactly the unweighted one. `times` = listed starts already in minutes from the plan's midnight, which a plan
     running past midnight needs (it may exceed 1440); without it they are read off the start datetimes.
+    `dead` (in-play only) = minute ranges worth zero, Kalshi's weekly halt (see kalshi_dead_minutes).
 
     Weighted interval scheduling with a budget - a DP over candidates sorted by close time, NOT a search over
     combinations: at ~288 candidates the exhaustive form is C(288,4) ~ 283M and does not finish.
@@ -199,9 +223,11 @@ def optimise(starts, budget_min, min_gap_min, jitter_min, earliest_min, latest_m
     # test below could never fire and the optimiser silently returned "nothing worth opening" at any wall
     # clock not already on the grid.
     earliest_min = ((earliest_min + 14) // 15) * 15
+    if inplay and dead and weights is None:
+        weights = [1.0] * 24                               # unweighted, but on the path that can zero minutes
     weighted = inplay and weights is not None
     if weighted:                                           # one prefix pass, then every candidate is O(1)
-        val = _live_value(times, curve, weights, earliest_min, max(latest_min, earliest_min))
+        val = _live_value(times, curve, weights, earliest_min, max(latest_min, earliest_min), dead)
         vat = lambda x: val[min(max(x - earliest_min, 0), len(val) - 1)]
     cands = []                                             # (close, open, minutes, covered)
     for o in range(earliest_min, latest_min, 15):
@@ -315,6 +341,8 @@ def main() -> int:
     ap.add_argument("--objective", default=os.environ.get("PINNACLE_BLOCK_OBJECTIVE", "starts"),
                     choices=("starts", "inplay"), help="what a window is scored by (default: env or 'starts')")
     ap.add_argument("--curve", default="", help="live_curve.json for --objective inplay (default: beside this file)")
+    ap.add_argument("--keep-kalshi-maintenance", action="store_true",
+                    help="value Kalshi's Thursday halt like any other hour (default: worth zero, in-play objective)")
     a = ap.parse_args()
     curve = load_curve(a.curve or None) if a.objective == "inplay" else None
     if a.objective == "inplay" and curve is None:
@@ -363,8 +391,13 @@ def main() -> int:
     # Plan against the jitter the lifecycle will ACTUALLY apply, or coverage is scored against a schedule
     # that will not happen.
     plan_jitter = a.jitter if a.jitter is not None else int(float(os.environ.get("PINNACLE_JITTER_MIN", "7")))
+    dead = [] if (a.keep_kalshi_maintenance or not curve) else kalshi_dead_minutes(
+        now.replace(hour=0, minute=0, second=0, microsecond=0), max(hm(a.latest), 1440))
+    if dead:
+        print("[BLOCKS] Kalshi's weekly maintenance %s counts as zero (no trading) - its hours go elsewhere"
+              % ", ".join(str(Block(x, y)) for x, y in dead))
     blocks = optimise(starts, budget, a.min_gap, plan_jitter, earliest, hm(a.latest), now_min,
-                      objective="inplay" if curve else "starts", curve=curve)
+                      objective="inplay" if curve else "starts", curve=curve, dead=dead)
     allb = sorted(frozen + blocks)
     if not allb:
         print("[BLOCKS] nothing worth opening - leaving the schedule untouched.")

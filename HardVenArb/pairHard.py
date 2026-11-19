@@ -124,6 +124,27 @@ def fetch_open_events() -> list[dict]:
     return events
 
 
+def kalshi_trading_paused():
+    """Is Kalshi's trading PAUSED right now? GET /exchange/status (public, one request): True = paused, False = on,
+    None = the status could not be read (the prices are then taken as live, as before).
+
+    WHY (2026-11-19). Kalshi's weekly maintenance (Thu 03:00-05:00 ET) halts trading while every market read keeps
+    answering, with the book as it stood when trading stopped. The market makers pull their quotes, the books go
+    hollow (11-19: 8-34c, 16-75c), and `_yes_price` falls back to the LAST TRADE, from before the halt. The
+    moneyline gate held that against Pinnacle's live price: the 08:31 run cleared 3 in-play tennis rows as "wrong
+    game" after 30 min of play (Kalshi 0.32 vs Pinnacle 0.60, 0.22 vs 0.59). Rows scaffolded in a halt carry
+    `kalshi_paused`, and the gate does not judge their in-play prices (pair_auto.price_validate). Pre-match prices
+    barely move in two hours and are judged as before. Same field names as the EV bot's VenueHold."""
+    try:
+        r = requests.get(f"{KALSHI_BASE}/exchange/status", timeout=15)
+        r.raise_for_status()
+        s = r.json()
+    except Exception as ex:                      # a status read must never cost the scaffold
+        print(f"[KALSHI] exchange status unavailable ({type(ex).__name__}) - prices taken as live.")
+        return None
+    return not (s.get("exchange_active") is True and s.get("trading_active") is True)
+
+
 def _close_date(market: dict):
     for fld in ("expected_expiration_time", "close_time"):
         val = market.get(fld)
@@ -213,7 +234,13 @@ def main() -> None:
     expired_n = 0
 
     print("[KALSHI] fetching open events…")
+    paused_before = kalshi_trading_paused()
     events = fetch_open_events()
+    # Either side of the read: a halt that began or ended during it froze part of what was read.
+    kalshi_paused = bool(paused_before or kalshi_trading_paused())
+    if kalshi_paused:
+        print("[KALSHI] trading is PAUSED (exchange status): its books are frozen at the halt, so the moneyline gate "
+              "will not judge in-play rows on these prices.")
     sports = [e for e in events if (e.get("category", "") or "").lower() == "sports"]
     print(f"[KALSHI] {len(events)} open events, {len(sports)} in Sports.")
 
@@ -292,6 +319,9 @@ def main() -> None:
                         e[flag] = p[flag]
                 carried += 1
 
+    if kalshi_paused:                       # fresh every scaffold, never carried: it describes THIS read's prices
+        for e in entries:
+            e["kalshi_paused"] = True
     entries.sort(key=lambda e: (e["settlement_date"], e["kalshi_ticker"]))
 
     if out_path.exists():

@@ -12,7 +12,7 @@ in the Americas) pays about three times the morning per match. Not load - the bu
 the morning.
 
 HOW. Per local clock hour, over the bot's WARM 5-minute buckets (telemetry in the bucket and in the 15 minutes
-before it, so a session's first minutes don't count):
+before it, so a session's first minutes don't count; never inside Kalshi's Thursday halt, see warm_buckets):
     covered match-hours = every settled tennis market's REAL end (Kalshi close_time), live for the measured
         length distribution (live_curve.match_lengths, x1.1 as there), counted where the bot was warm.
     fills = EvLive rows with FillCount > 0 in a warm bucket.
@@ -34,6 +34,7 @@ import json
 import os
 from datetime import date, datetime, timedelta, timezone
 
+import kalshi_hours
 import live_curve as lc
 
 SIDECAR = os.path.dirname(os.path.abspath(__file__))
@@ -57,7 +58,12 @@ def _in(fn: str, prefix: str, since: str, until: str) -> bool:
 
 
 def warm_buckets(repo: str, since: str, until: str) -> set:
-    """LOCAL 5-minute buckets where the bot was up, and had been for the 15 minutes before."""
+    """LOCAL 5-minute buckets where the bot was up, and had been for the 15 minutes before - and Kalshi was trading.
+
+    NOT IN KALSHI'S HALT (2026-11-19). The bot keeps watching through the Thursday maintenance but nothing can fill,
+    so those minutes counted as covered with no chance of a fill and pulled down the rate of the clock hours the
+    halt falls in - for every day of the week, since a weight is per clock hour. The planner now skips the halt
+    (build_blocks.kalshi_dead_minutes); the hours it re-allocates must be valued on minutes that could trade."""
     minutes = set()
     for fn in sorted(glob.glob(os.path.join(repo, "EvTelemetry_2026*.csv"))):
         if not _in(fn, "EvTelemetry_", since, until):
@@ -72,7 +78,11 @@ def warm_buckets(repo: str, since: str, until: str) -> set:
             up.add(_bucket(_local(m + ":00")))
         except ValueError:
             pass
-    return {b for b in up if all(b - timedelta(minutes=5 * k) in up for k in (1, 2, 3))}
+    warm = {b for b in up if all(b - timedelta(minutes=5 * k) in up for k in (1, 2, 3))}
+    if warm:
+        halts = kalshi_hours.windows(min(warm), max(warm) + timedelta(minutes=5))
+        warm = {b for b in warm if not any(a <= b < e for a, e in halts)}
+    return warm
 
 
 def build(days: int = 42, until: str | None = None, alpha: float = 30.0, min_cover: float = 20.0,

@@ -27,7 +27,9 @@ namespace KalshiEvBot;
 /// <para><b>Matches never paired.</b> The pairing run logs every tennis event Pinnacle's board lists that it left
 /// unpaired (<c>pair_misses.jsonl</c>, see pair_pinnacle.board_misses). Only the LATEST run counts, so a match the
 /// next run pairs stops counting. One alert per event per day when the sidecar shows Pinnacle pricing it live, or,
-/// when the sidecar holds nothing for its league, once its listed start has passed.</para>
+/// when the sidecar holds nothing for it and has not held it earlier either, once its listed start has passed. (The
+/// sidecar drops a match only when Pinnacle deletes it - the match is over - so held-then-gone is never a blind
+/// spot; see <see cref="UnpairedWhy"/>.)</para>
 ///
 /// <para><b>Never noisy by construction.</b> Nothing is judged outside a session, nor in its first
 /// <c>EV_INPLAY_WATCH_GRACE_MIN</c> (5) while the feed re-subscribes; a miss never spans a break; at most
@@ -57,6 +59,7 @@ public sealed class InPlayWatch
     private readonly RollingCsv _log;
     private readonly Dictionary<string, Track> _tracks = new(StringComparer.Ordinal);
     private readonly HashSet<string> _alertedToday = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _boardHeld = new(StringComparer.Ordinal);   // unpaired board tokens the sidecar held
     private readonly Queue<DateTime> _sent = new();
     private DateTime? _liveSince;
     private string _day = "";
@@ -264,21 +267,20 @@ public sealed class InPlayWatch
     private async Task UnpairedAsync(DateTime now, List<string> alerts, CancellationToken ct)
     {
         var recs = LatestMisses(ReadTail(_missesPath), out DateTime runAt);
-        if (recs.Count == 0 || now - runAt > TimeSpan.FromHours(2)) return;
+        if (recs.Count == 0 || now - runAt > TimeSpan.FromHours(2)) { _boardHeld.Clear(); return; }
+        var listed = new HashSet<string>(StringComparer.Ordinal);
         foreach (var r in recs)
         {
             string ev = Str(r, "event_id");
-            if (ev.Length == 0 || _alertedToday.Contains("u:" + ev)) continue;
             r.TryGetProperty("board", out var board);
-            var j = await RedirectAsync(Str(board, "token"), ct);
+            string tok = Str(board, "token");
+            listed.Add(tok);
+            if (ev.Length == 0 || _alertedToday.Contains("u:" + ev)) continue;
+            var j = await RedirectAsync(tok, ct);
             if (j is null) continue;
-            string? where = PinnacleLivePriced(j.Value, MaxPushAgeSec);
-            bool cached = j.Value.TryGetProperty("parent", out var pa) && pa.ValueKind == JsonValueKind.Object;
-            DateTime? st = ParseUtc(Str(board, "start"));
-            string? why = where is not null ? $"Pinnacle is pricing it LIVE ({where})"
-                        : !cached && st is DateTime s && s <= now && now - s <= TimeSpan.FromHours(3)
-                            ? $"listed to start {s:HH:mm} UTC; live state unknown (the sidecar holds nothing for it)"
-                        : null;
+            bool heldBefore = _boardHeld.Contains(tok);
+            if (Held(j.Value)) _boardHeld.Add(tok);
+            string? why = UnpairedWhy(j.Value, ParseUtc(Str(board, "start")), now, heldBefore, MaxPushAgeSec);
             if (why is null) continue;
             _alertedToday.Add("u:" + ev);
             string names = board.ValueKind == JsonValueKind.Object && board.TryGetProperty("names", out var nm)
@@ -288,6 +290,28 @@ public sealed class InPlayWatch
             alerts.Add($"👁 **Unpaired in-play match** `{ev}` ({Str(r, "kalshi")} = {names}, {Str(board, "league")}): "
                      + $"{why}. The {runAt:HH:mm} pairing run left it unpaired - {Str(r, "why")}.");
         }
+        _boardHeld.IntersectWith(listed);
+    }
+
+    /// <summary>Does the sidecar hold this token at all (a cached entry of its own, live or not)?</summary>
+    public static bool Held(JsonElement redirect)
+        => redirect.ValueKind == JsonValueKind.Object && redirect.TryGetProperty("parent", out var pa)
+           && pa.ValueKind == JsonValueKind.Object;
+
+    /// <summary>Why a match the pairing run left unpaired is worth an alert, or null. Pinnacle seen pricing it live
+    /// always is. Otherwise only "live state unknown": the sidecar holds nothing for it, its listed start passed at
+    /// most 3 h ago, and the sidecar has not held it earlier either (<paramref name="heldBefore"/>). The sidecar drops
+    /// a match only on Pinnacle's delete, i.e. when it is over, so held-then-gone is a finished match. 11-19: both
+    /// alerts in Kalshi's halt came ~1 h after the run that unpaired them, at the moment the sidecar dropped them,
+    /// and both matches had finished by the reopen at 10:00.</summary>
+    public static string? UnpairedWhy(JsonElement redirect, DateTime? start, DateTime now, bool heldBefore, int maxPushAgeSec)
+    {
+        string? where = PinnacleLivePriced(redirect, maxPushAgeSec);
+        if (where is not null) return $"Pinnacle is pricing it LIVE ({where})";
+        if (Held(redirect) || heldBefore) return null;
+        return start is DateTime s && s <= now && now - s <= TimeSpan.FromHours(3)
+            ? $"listed to start {s:HH:mm} UTC; live state unknown (the sidecar holds nothing for it)"
+            : null;
     }
 
     /// <summary>The miss records of the LATEST pairing run in <c>pair_misses.jsonl</c> (each run writes a

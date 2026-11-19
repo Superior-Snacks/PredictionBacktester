@@ -8,6 +8,8 @@ because a bad mid makes the gate SWAP a correct pair.
 
 Run: python -m pytest test_yes_price.py -q     (from HardVenArb/sidecar)
 """
+import datetime as dt
+import json
 import sys
 from pathlib import Path
 
@@ -150,3 +152,67 @@ def test_scaffolded_entry_carries_the_price(monkeypatch):
     m = {"yes_bid_dollars": "0.4000", "yes_ask_dollars": "0.4400"}
     entry = {"kalshi_ticker": "KXFOO", "kalshi_yes_price": pairHard._yes_price(m)}
     assert entry["kalshi_yes_price"] == 0.42
+
+
+# ── Kalshi's trading halt (2026-11-19): the price read in it is frozen, and the rows say so ──────────
+
+class _Resp:
+    def __init__(self, data):
+        self._d = data
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._d
+
+
+def test_exchange_status_paused_on_and_unreadable(monkeypatch):
+    state, urls = {}, []
+
+    def fake_get(url, timeout=0, **kw):
+        urls.append(url)
+        return _Resp(state["v"])
+    monkeypatch.setattr(pairHard.requests, "get", fake_get)
+    for v, want in (({"exchange_active": True, "trading_active": False}, True),     # the weekly maintenance
+                    ({"exchange_active": True, "trading_active": True}, False),
+                    ({"exchange_active": False, "trading_active": True}, True),
+                    ({}, True)):                                                  # no fields = not provably on
+        state["v"] = v
+        assert pairHard.kalshi_trading_paused() is want, v
+    assert all(u.endswith("/exchange/status") for u in urls)
+
+    def down(url, timeout=0, **kw):
+        raise pairHard.requests.ConnectionError("down")
+    monkeypatch.setattr(pairHard.requests, "get", down)
+    assert pairHard.kalshi_trading_paused() is None          # unreadable: prices taken as live, as before
+
+
+def _scaffold(monkeypatch, tmp_path, statuses):
+    """pairHard.main() on one real-shaped market (EFSKRA-EFS's hollow book in the 11-19 halt), status stubbed."""
+    ev = {"category": "Sports", "series_ticker": "KXITFMATCH", "title": "Efstathiou vs Kravchenko",
+          "event_ticker": "KXITFMATCH-26NOV19EFSKRA",
+          "markets": [{"ticker": "KXITFMATCH-26NOV19EFSKRA-EFS", "title": "Efstathiou", "yes_sub_title": "Melios Efstathiou",
+                       "expected_expiration_time": (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=3)).isoformat(),
+                       "yes_bid_dollars": "0.0800", "yes_ask_dollars": "0.3400", "last_price_dollars": "0.3200"}]}
+    seq = list(statuses)
+    monkeypatch.setattr(pairHard, "fetch_open_events", lambda: [ev])
+    monkeypatch.setattr(pairHard, "kalshi_trading_paused", lambda: seq.pop(0))
+    out = tmp_path / "pairs.json"
+    monkeypatch.setattr(sys, "argv", ["pairHard.py", "--series", "KXITFMATCH", "--out", str(out), "--fresh"])
+    pairHard.main()                                          # (paused before the fetch: no second read needed)
+    return json.loads(out.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("statuses", [(True, True), (False, True), (True, False)])
+def test_rows_read_in_a_halt_carry_kalshi_paused(monkeypatch, tmp_path, statuses):
+    """A halt for the whole read, one that began during it, one that ended during it: each froze what was read."""
+    rows = _scaffold(monkeypatch, tmp_path, statuses)
+    assert rows[0]["kalshi_paused"] is True
+    assert rows[0]["kalshi_yes_price"] == 0.32               # the last trade before the halt - what the gate must not judge
+
+
+@pytest.mark.parametrize("statuses", [(False, False), (None, None), (None, False)])
+def test_rows_read_while_trading_or_unknown_carry_no_flag(monkeypatch, tmp_path, statuses):
+    rows = _scaffold(monkeypatch, tmp_path, statuses)
+    assert "kalshi_paused" not in rows[0]

@@ -827,6 +827,12 @@ def main() -> None:
     # Pre-match rows are judged as before. Between the two, a wrong in-play pairing made in a break still faces the
     # name audit below and the EV bot's own disagreement guard.
     #
+    # NOR ON KALSHI'S PRICE FROZEN BY ITS OWN HALT (2026-11-19) - the mirror image. Kalshi's weekly maintenance stops
+    # trading but not market reads, so a run inside it scaffolds Kalshi's last trade from before the halt. The 08:31
+    # run of 11-19 held that against Pinnacle's live price after 30 min of play and cleared 3 in-play tennis rows as
+    # "wrong game" (0.32 vs 0.60, 0.22 vs 0.59); the in-play watch then flagged two of them as unpaired. Rows the
+    # scaffold read in a halt carry `kalshi_paused` (pairHard.kalshi_trading_paused): no in-play row is judged then.
+    #
     # NOR MAY IT SWAP A SIDE THE BOARD'S OWN NAMES SETTLE (2026-11-13). The gate swaps whenever the two venues sit
     # either side of 50c, and Pinnacle's price carries its margin, so near even it is above 50c on BOTH sides:
     # Kalshi 0.49 vs Pinnacle 0.52 read as "inverted". The name audit below then found the YES token naming the
@@ -858,15 +864,19 @@ def main() -> None:
         live_max_age = float(os.environ.get("HARDVEN_PRICE_GATE_LIVE_MAX_AGE_SEC", "60") or 60)
     except ValueError:
         live_max_age = 60.0
+    kalshi_paused = any(e.get("kalshi_paused") for e in pairs)      # the scaffold read Kalshi in a trading halt
     if not args.no_price_gate:
         gate = price_validate([e for e in pairs if id(e) not in kept_ids], args.sidecar, args.price_tol,
                               keep_side=named_side, kept_out=names_kept,
-                              live_max_age=live_max_age if live_max_age > 0 else None, stale_out=stale_live)
+                              live_max_age=live_max_age if live_max_age > 0 else None, stale_out=stale_live,
+                              kalshi_paused=kalshi_paused)
         if any(gate):
             print(f"[PAIR] price-gate (tol={args.price_tol}): {gate[0]} consistent | {gate[1]} inverted-fixed | "
                   f"{gate[2]} wrong-game rejected | {gate[3]} unvalidated (no price)"
                   + (f" | {len(names_kept)} near-even row(s) kept on the side their names settle" if names_kept else "")
-                  + (f" | {len(stale_live)} in-play row(s) left standing, Pinnacle's price frozen (no session)"
+                  + (f" | {len(stale_live)} in-play row(s) left standing, "
+                     + ("Kalshi's trading paused (its prices frozen at the halt)" if kalshi_paused
+                        else "Pinnacle's price frozen (no session)")
                      if stale_live else ""))
 
     # ── ORIENTATION AUDIT: does the assigned token actually NAME the outcome? ─────────────────────────
@@ -989,7 +999,8 @@ def main() -> None:
             "released": released, "named": named,
             "ended": sum(1 for r, _ in kept_log if r["decision"] == "ended"),
             "names_kept": len(names_kept),            # near-even rows the gate would have swapped (and lost)
-            "stale_live": len(stale_live)}}           # in-play rows not judged on a price frozen in a break
+            "stale_live": len(stale_live),            # in-play rows not judged on a frozen price (either venue's)
+            "kalshi_paused": kalshi_paused}}          # Kalshi was read in a trading halt (the frozen side is its)
         try:                                   # best-effort: an audit log must never cost a pairing run
             with open(Path(args.pairs).with_name("pair_kept.jsonl"), "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(run_rec) + "\n")

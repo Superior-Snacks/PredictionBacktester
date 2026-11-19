@@ -33,6 +33,13 @@ times ("20:45-01:45"), which the lifecycle reads as crossing midnight.
 Between midnight and LATEST we are still in YESTERDAY's service day. A pass then (a restart, or a configured
 hour) must freeze the block that is running: judged on today's clock, 20:45 has "not opened yet", and the
 re-plan would close the browser mid-session.
+
+KALSHI'S WEEKLY HALT (2026-11-19)
+---------------------------------
+Thursdays 03:00-05:00 New York (08:00-10:00 UTC in US winter) Kalshi does not trade, so a window open then buys
+nothing: 11-19's plan opened 07:39-12:40 and spent two hours of it in the halt. Those minutes are worth zero to the
+in-play objective (build_blocks.kalshi_dead_minutes), so the same budget lands on the next-best hours. A block that
+already opened is frozen as always. PINNACLE_BLOCK_SKIP_KALSHI_MAINT=0 values the halt like any other hour.
 """
 from __future__ import annotations
 import asyncio, datetime as dt, os
@@ -63,8 +70,10 @@ class BlockScheduler:
                  hours: str = "06,12", budget_h: float = 10.0, min_gap: int = 50,
                  jitter: int = 7, earliest: str = "06:00", latest: str = "23:00",
                  horizon_h: int = 30, initial_delay: float = 20.0, paired_only: bool = True,
-                 objective: str = "starts", curve_path: str | None = None, weights_path: str | None = None):
+                 objective: str = "starts", curve_path: str | None = None, weights_path: str | None = None,
+                 skip_kalshi_maint: bool = True):
         self._lc = lifecycle
+        self._skip_kalshi = bool(skip_kalshi_maint)          # Kalshi's Thursday halt is worth zero (in-play objective)
         # "starts" (the original) or "inplay" (expected live minutes - see build_blocks). The curve is re-read
         # on every pass, so rebuilding live_curve.json takes effect at the next re-author without a restart.
         self._objective = "inplay" if (objective or "").strip().lower() == "inplay" else "starts"
@@ -150,10 +159,14 @@ class BlockScheduler:
 
         spent = sum(b.close_min - b.open_min for b in frozen)
         budget = max(int(self._budget_h * 60) - spent, 0)
+        dead = bb.kalshi_dead_minutes(midnight, latest_min) if (curve and self._skip_kalshi) else []
+        if dead:
+            print(f"[BLOCKS] {why}: Kalshi's weekly maintenance {', '.join(str(bb.Block(a, b)) for a, b in dead)} "
+                  "counts as zero (no trading) - its hours go elsewhere")
         blocks = bb.optimise(starts, budget, self._min_gap, self._jitter,
                              earliest, latest_min, now_min,
                              objective="inplay" if curve else "starts", curve=curve,
-                             weights=weights, times=times)
+                             weights=weights, times=times, dead=dead)
         allb = sorted(frozen + blocks)
         if not allb:
             print(f"[BLOCKS] {why}: nothing worth opening for the rest of today - pins unchanged.")
@@ -171,8 +184,8 @@ class BlockScheduler:
             print(f"[BLOCKS] {why}: in-play objective - {got/60:.1f} of {full/60:.1f} expected live "
                   f"match-hours covered ({100*got/max(full, 1e-9):.0f}%)")
         if weights:
-            got = bb.expected_live(times, allb, curve, self._jitter, weights=weights)
-            full = bb.expected_live(times, [bb.Block(0, 2880)], curve, weights=weights)
+            got = bb.expected_live(times, allb, curve, self._jitter, weights=weights, dead=dead)
+            full = bb.expected_live(times, [bb.Block(0, 2880)], curve, weights=weights, dead=dead)
             print(f"[BLOCKS] {why}: value-weighted - {got/60:.1f} of {full/60:.1f} weighted match-hours "
                   f"covered ({100*got/max(full, 1e-9):.0f}%)")
         return spec
@@ -218,6 +231,7 @@ class BlockScheduler:
     def status(self) -> dict:
         return {"hours": self._hours, "budget_h": self._budget_h, "jitter": self._jitter,
                 "objective": self._objective, "window": f"{self._earliest}-{self._latest}",
+                "skip_kalshi_maint": self._skip_kalshi,
                 "weights": os.path.basename(self._weights_path) if self._weights_path else None,
                 "last_spec": self.last_spec, "last_error": self.last_error,
                 "last_run": self.last_run.isoformat() if self.last_run else None}

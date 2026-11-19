@@ -1822,6 +1822,26 @@ public static class SelfTest
                   "pair_misses.jsonl: only the LATEST run's misses count");
             var none = InPlayWatch.LatestMisses(lines.Append("{\"at\":\"2026-11-18T13:26:00Z\",\"run\":{\"misses\":0}}"), out _);
             Check(none.Count == 0, "a later run that left nothing unpaired clears them");
+
+            // Unpaired matches (2026-11-19): the 2 alerts of Kalshi's halt fired when the sidecar DROPPED the matches -
+            // it drops one only on Pinnacle's delete (the match over) - ~1 h after the run that unpaired them.
+            var now = new DateTime(2026, 11, 19, 9, 30, 0, DateTimeKind.Utc);
+            DateTime? began = new DateTime(2026, 11, 19, 7, 42, 0, DateTimeKind.Utc);
+            var nothing = J("{\"parent\":null,\"redirect\":null,\"redirect_target\":null}");
+            var heldPre = J("{\"parent\":{\"id\":\"x\",\"live\":false,\"status\":\"open\",\"age_s\":30}}");
+            Check(InPlayWatch.UnpairedWhy(J("{\"redirect_target\":" + cachedLive + "}"), began, now, true, 300) is string u1
+                  && u1.Contains("LIVE"), "unpaired: Pinnacle seen pricing it live = alert, whatever came before");
+            Check(InPlayWatch.UnpairedWhy(nothing, began, now, false, 300) is string u2 && u2.Contains("unknown"),
+                  "unpaired: never held, started 1h48m ago = 'live state unknown' (a league the sidecar does not follow)");
+            Check(InPlayWatch.UnpairedWhy(nothing, began, now, true, 300) is null,
+                  "unpaired: held earlier, gone now = Pinnacle deleted it, the match is over - NO alert (the 11-19 two)");
+            Check(InPlayWatch.UnpairedWhy(heldPre, began, now, false, 300) is null,
+                  "unpaired: held but not live-priced = nothing to see");
+            Check(InPlayWatch.Held(heldPre) && !InPlayWatch.Held(nothing), "Held = the sidecar has the token's own entry");
+            Check(InPlayWatch.UnpairedWhy(nothing, now.AddHours(-4), now, false, 300) is null,
+                  "unpaired: listed start more than 3 h ago = no 'unknown' alert");
+            Check(InPlayWatch.UnpairedWhy(nothing, now.AddMinutes(30), now, false, 300) is null,
+                  "unpaired: not started yet = no alert");
         }
 
         Console.WriteLine();
