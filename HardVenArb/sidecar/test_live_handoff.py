@@ -23,7 +23,7 @@ from pinnacle_adapter import PinnacleAdapter  # noqa: E402
 from book_adapter import Selection  # noqa: E402
 
 LID, PARENT, CHILD, GAMES = "9417", "1640000001", "1640000777", "1640000778"
-GAMES_PRE, PROP = "1640000002", "1640000779"
+GAMES_PRE, PROP, KILLS = "1640000002", "1640000779", "1640000780"
 P_HOME, P_AWAY = f"{LID}:{PARENT}:home", f"{LID}:{PARENT}:away"
 DTOK = f"{LID}:{PARENT}:spread:-1.5:home"            # a SETS handicap token on the paired matchup
 START = "2026-11-10T10:00:00Z"
@@ -231,6 +231,36 @@ def main() -> int:
     r.append(check("recorder: stops itself at the cap (no third line, file closed)",
                    (len(lines), x._ws_dump_path, x._ws_dump_fh), (2, "", None)))
     os.remove(path)
+
+    # ── ESPORTS (2026-11-19): Dota 2 hangs a "(Kills)" twin - most kills, a different market - on the same parentId
+    # as the live "Regular" child, with the same two names once the suffix is cut. The Games rule did not cover it.
+    # 18. parent record never seen (units unknown): the Kills twin pushing last must not take the parent's slot
+    y = adapter()
+    y._apply(push(CHILD, "Anna Alpha", "Bea Beta", -150, +130, units="Regular", parent=PARENT), live=True)
+    y._apply(push(KILLS, "Anna Alpha", "Bea Beta", -400, +300, units="Kills", parent=PARENT), live=True)
+    out = y._read_cache([P_HOME], time.time())
+    r.append(check("esports: unknown parent units, a Kills twin cannot evict the live child",
+                   (out[P_HOME].live, round(out[P_HOME].decimal_odds, 3)), (True, round(1 + 100 / 150, 3))))
+    # 19. no parentIds at all: the NEWER Kills twin must not take the players' slot
+    z = adapter()
+    z._apply(push(CHILD, "Anna Alpha", "Bea Beta", -150, +130, units="Regular"), live=True)
+    z._apply(push(KILLS, "Anna Alpha", "Bea Beta", -400, +300, units="Kills"), live=True)
+    out = z._read_cache([P_HOME], time.time())
+    r.append(check("esports: the players link is not won by a newer Kills twin",
+                   (out[P_HOME].live, round(out[P_HOME].decimal_odds, 3)), (True, round(1 + 100 / 150, 3))))
+    # 20. the parent's own record seen (Regular): the twin is refused as before
+    aa = adapter()
+    aa._apply(push(PARENT, "Anna Alpha", "Bea Beta", -120, +100, units="Regular"), live=False)
+    aa._apply(push(CHILD, "Anna Alpha", "Bea Beta", -150, +130, units="Regular", parent=PARENT), live=True)
+    aa._apply(push(KILLS, "Anna Alpha", "Bea Beta", -400, +300, units="Kills", parent=PARENT), live=True)
+    out = aa._read_cache([P_HOME], time.time())
+    r.append(check("esports: Regular parent seen, the Kills twin is refused", out[P_HOME].live, True))
+    # 21. which units count as a twin
+    from pinnacle_adapter import _is_twin_units
+    r.append(check("twin units: Games / Kills / Maps / Rounds yes; Sets / Regular / blank / HomeRuns no",
+                   [_is_twin_units(u) for u in ("Games", "Kills", "Maps", "Rounds", "Sets", "Regular", "", None,
+                                                "HomeRuns")],
+                   [True, True, True, True, False, False, False, False, False]))
 
     n = sum(r)
     print(f"\n{n}/{len(r)} passed")

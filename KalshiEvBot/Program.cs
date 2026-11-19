@@ -152,7 +152,8 @@ internal static class Program
             bool autoPipe = false;
             if (sport is not null)
             {
-                string[] known = { "tennis", "basketball", "football", "baseball", "hockey", "soccer", "other" };
+                // Every sport the classifier can return (cricket and esports were missing from a hand-kept list).
+                var known = EvSports.Known;
                 if (!known.Contains(sport))
                 {
                     Console.WriteLine($"[SPORT] unknown sport '{sport}' - one of: {string.Join(", ", known)}.");

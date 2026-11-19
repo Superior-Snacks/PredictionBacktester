@@ -48,7 +48,20 @@ public static class EvSports
         ["KXPSLGAME"] = "cricket", ["KXWPLGAME"] = "cricket", ["KXCPLMATCH"] = "cricket",
         ["KXHUNDREDMATCH"] = "cricket", ["KXWHUNDREDMATCH"] = "cricket", ["KXLPLMATCH"] = "cricket",
         ["KXT20CANADAMATCH"] = "cricket", ["KXSSHIELDMATCH"] = "cricket", ["KXCOUNTYCHAMPMATCH"] = "cricket",
+        // Esports (2026-11-19, the shadow). Every per-match series ends in "GAME" and would read soccer - the retired
+        // sport the report leaves out. The simulated ones (eSoccer 3-way, eFootball) are never paired; named "other"
+        // so they can't read soccer either, like eBasketball above.
+        ["KXCS2GAME"] = "esports", ["KXDOTA2GAME"] = "esports", ["KXLOLGAME"] = "esports",
+        ["KXVALORANTGAME"] = "esports", ["KXR6GAME"] = "esports", ["KXCODGAME"] = "esports",
+        ["KXOWGAME"] = "esports", ["KXMLBBGAME"] = "esports", ["KXROCKETLEAGUEGAME"] = "esports",
+        ["KXESOCCERGAME"] = "other", ["KXEFOOTBALLGAME"] = "other",
     };
+
+    /// <summary>Every sport name <see cref="Of"/> can return - what `--resolve --sport` accepts. Derived from the map
+    /// plus the pattern fallbacks below, so a sport added to the map can't be missing from the report's list.</summary>
+    public static IReadOnlyList<string> Known { get; } =
+        BySeries.Values.Concat(new[] { "tennis", "baseball", "football", "soccer", "other" })
+                .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s, StringComparer.Ordinal).ToList();
 
     /// <summary>Coarse sport from the Kalshi SERIES (the ticker up to its first '-'). Matching on the series
     /// rather than the whole ticker keeps a team or player code from deciding the sport. An unrecognised

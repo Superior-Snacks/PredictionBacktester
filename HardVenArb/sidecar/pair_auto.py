@@ -227,6 +227,12 @@ SERIES_SPORT = {
     "KXWHUNDREDMATCH": {"CRICKET"}, "KXLPLMATCH": {"CRICKET"}, "KXT20CANADAMATCH": {"CRICKET"},
     "KXSSHIELDMATCH": {"CRICKET"}, "KXT10MATCH": {"CRICKET"}, "KXWT10MATCH": {"CRICKET"},
     "KXBOXING": {"BOXING"}, "KXUFCFIGHT": {"MARTIAL ARTS"},
+    # Esports (2026-11-19, the esports shadow). Pinnacle's sport 12 is named "E Sports"; the "...GAME" series would
+    # otherwise be unanchored, and org names ("Liquid", "Falcons", "Spirit") are club names in other sports too.
+    "KXCS2GAME": {"E SPORTS", "ESPORTS"}, "KXDOTA2GAME": {"E SPORTS", "ESPORTS"},
+    "KXLOLGAME": {"E SPORTS", "ESPORTS"}, "KXVALORANTGAME": {"E SPORTS", "ESPORTS"},
+    "KXR6GAME": {"E SPORTS", "ESPORTS"}, "KXCODGAME": {"E SPORTS", "ESPORTS"}, "KXOWGAME": {"E SPORTS", "ESPORTS"},
+    "KXMLBBGAME": {"E SPORTS", "ESPORTS"}, "KXROCKETLEAGUEGAME": {"E SPORTS", "ESPORTS"},
 }
 
 

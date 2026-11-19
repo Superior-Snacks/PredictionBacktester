@@ -145,6 +145,19 @@ def _strip_units(name: str) -> str:
     return (name or "").split("(")[0].strip()
 
 
+# The units of a DERIVATIVE TWIN: a matchup with the SAME two participants whose "moneyline" is a different market,
+# hung on the same parentId as the real live child. Tennis has the "(Games)" twin (games won); esports the "(Kills)"
+# one (most kills - Dota 2 board 2026-11-19, next to the live "Regular" child) and per-map / per-round counters. Once
+# _strip_units has cut the suffix their names are the real match's, so the UNITS are the only tell. A winner market's
+# units are "Sets", "Regular" or blank. Every twin check below goes through this one test (it was "game" alone).
+_TWIN_UNITS = ("game", "kill", "round", "map")
+
+
+def _is_twin_units(units) -> bool:
+    u = str(units or "").lower()
+    return any(w in u for w in _TWIN_UNITS)
+
+
 def _mid_num(mid) -> int:
     """A matchup id as a number (ids are issued in increasing order: a live replacement is always newer than
     the matchup it replaces). 0 when it is not numeric."""
@@ -1240,7 +1253,7 @@ class PinnacleAdapter(BookAdapter):
         if not got:
             return ""
         child, names, units = got
-        if "game" in (units or "").lower():
+        if _is_twin_units(units):
             return ""
         want = _norm_name(self._pair_side_name(sid))
         if not want:
@@ -1293,10 +1306,10 @@ class PinnacleAdapter(BookAdapter):
         """Can a child with these units be the parent's LIVE REPLACEMENT - the same market re-issued in-play -
         rather than a twin hung on the same parentId (tennis "(Games)", MLB prop matchups)? The replacement has
         the parent's own units (Sets -> Sets, Regular -> Regular) when the parent's record has been seen;
-        otherwise (or when either side's units are blank) anything but a Games twin."""
+        otherwise (or when either side's units are blank) anything but a twin (Games, Kills, ... - _TWIN_UNITS)."""
         pu = str((self._live_meta.get(parent_key) or {}).get("units") or "").lower()
         u = str(units or "").lower()
-        return u == pu if (pu and u) else "game" not in u
+        return u == pu if (pu and u) else not _is_twin_units(u)
 
     def explain_redirect(self, sid: str) -> dict:
         """READ-ONLY DIAGNOSTIC (/debug/redirect, 2026-11-11): why the in-play hand-off does or does not follow one
@@ -3056,7 +3069,7 @@ class PinnacleAdapter(BookAdapter):
                     # its family's (the July feed recording: the pre-match Sets matchup pushed as often as its
                     # live child), so last-writer-wins handed the slot back to the retired parent on every one of
                     # those. A live replacement is always a newer matchup than the one it replaces.
-                    if "game" not in str(rec.get("units") or "").lower():
+                    if not _is_twin_units(rec.get("units")):     # nor esports' "(Kills)" twin (2026-11-19)
                         _nk = (str(lid), frozenset(_pn))
                         _held = self._live_by_names.get(_nk)
                         if _held is None or _mid_num(mid) >= _mid_num(_held[0].split(":")[-1]):
@@ -3868,7 +3881,10 @@ class PinnacleAdapter(BookAdapter):
                 home = _strip_units(next((p.get("name", "") for p in parts if p.get("alignment") == "home"), ""))
                 away = _strip_units(next((p.get("name", "") for p in parts if p.get("alignment") == "away"), ""))
                 event = f"{home} vs {away}"
-                three_way = sport.strip().lower() == "soccer"
+                # 3-way = the full-game moneyline prices a DRAW: always soccer, and (2026-11-19) any other line that
+                # does - an esports best-of-two can end 1-1, a cricket Test drawn. Flagged here, the pairing refuses
+                # it for a two-sided Kalshi market instead of de-vigging two legs of a three-leg book.
+                three_way = sport.strip().lower() == "soccer" or "draw" in (winner_desigs.get(m.get("id")) or [])
                 for p in parts:
                     desig = p.get("alignment")
                     if desig not in _SIDES:
@@ -3907,8 +3923,8 @@ class PinnacleAdapter(BookAdapter):
         for mid_key, meta in list(self._live_meta.items()):
             if mid_key in have or time.time() - meta.get("ts", 0) > 900:
                 continue                       # already described, or the reader stopped seeing it
-            if "game" in (meta.get("units") or "").lower():
-                continue                       # the games-count shell is a different market
+            if _is_twin_units(meta.get("units")):
+                continue                       # a twin (games / kills count) is a different market
             names = meta.get("names") or {}
             if len(names) < 2:
                 continue
@@ -3926,7 +3942,9 @@ class PinnacleAdapter(BookAdapter):
             # pairing writes no `hardven_legs` and the EV bot drops the row loudly. That is the intended
             # outcome — in-play soccer is not yet pairable, and saying so is the whole point.
             live_sport = meta.get("sport", "") or "Tennis"
-            live_three_way = live_sport.strip().lower() == "soccer"
+            # ...and a live line that carries a draw PRICE is 3-way whatever the sport (an esports best-of-two;
+            # 2026-11-19): this path has no market list, but the odds cache holds the draw token if one is priced.
+            live_three_way = live_sport.strip().lower() == "soccer" or f"{mid_key}:draw" in self._cache
             for desig, nm in names.items():
                 out.append(CatalogEntry(
                     selection_id=f"{mid_key}:{desig}", sport=live_sport,

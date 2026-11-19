@@ -968,6 +968,20 @@ public static class SelfTest
                       "every cricket series is cricket (not 'other', not soccer)");
                 Check(!EvSports.ParseLive(null).Contains("cricket") && !new EvConfig().IsLiveSport("KXIPLGAME-X-RR"),
                       "cricket is NOT a live sport by default - shadow only until EV_LIVE_SPORTS names it");
+                // Esports (2026-11-19): the "...GAME" series read soccer (the retired sport) before.
+                Check(new[] { "KXCS2GAME-26NOV191100LGSNG-LG", "KXDOTA2GAME-26NOV200600NEMTS-TS",
+                              "KXLOLGAME-26NOV141400GENBLG-GEN", "KXVALORANTGAME-26NOV201700COUC9-C9",
+                              "KXR6GAME-26NOV142230FAZEDZ-FAZE", "KXCODGAME-26NOV061100HUNFAZ-HUN" }
+                          .All(t => EvSports.Of(t) == "esports"),
+                      "every esports series is esports (not soccer)");
+                Check(EvSports.Of("KXESOCCERGAME-26NOV191432ZAROARKO-TIE") == "other"
+                      && EvSports.Of("KXEBASKETBALLGAME-X-RAY") == "other",
+                      "the simulated e-sports (3-way / ties) are 'other', never soccer or esports");
+                Check(!EvSports.ParseLive(null).Contains("esports") && !new EvConfig().IsLiveSport("KXCS2GAME-X-LG"),
+                      "esports is NOT a live sport by default - shadow only");
+                Check(EvSports.Known.Contains("esports") && EvSports.Known.Contains("cricket")
+                      && EvSports.Known.Contains("tennis") && EvSports.Known.Contains("other"),
+                      "--resolve --sport accepts every sport the classifier returns (cricket, esports included)");
                 Check(EvSports.Of("KXNFLGAME-26OCT11KCBUF-KC") == "football", "an NFL market is football");
                 Check(EvSports.Of("KXNCAAFGAME-26OCT10ALAUGA-ALA") == "football", "an NCAAF market is football");
                 Check(EvSports.Of("KXMLBGAME-26OCT08NYYTOR-NYY") == "baseball", "an MLB market is baseball");
@@ -1122,6 +1136,20 @@ public static class SelfTest
                               "7 h after the start an ODI is still polled, an NFL game is not");
                     }
                     finally { Environment.SetEnvironmentVariable("EV_SHADOW_MAX_LIVE_MIN_CRICKET", savedCr); }
+
+                    // ...and esports' own (2026-11-19): a Dota best-of-five runs 4-6 h and starts late on its listed time.
+                    string? savedEs = Environment.GetEnvironmentVariable("EV_SHADOW_MAX_LIVE_MIN_ESPORTS");
+                    try
+                    {
+                        Environment.SetEnvironmentVariable("EV_SHADOW_MAX_LIVE_MIN_ESPORTS", "420");
+                        Check(cfgSc.ShadowMaxLiveMinFor("KXDOTA2GAME-X-TS") == 420 && cfgSc.ShadowMaxLiveMinForSport("esports") == 420
+                              && cfgSc.ShadowMaxLiveMinFor("KXNFLGAME-X-KC") == 300,
+                              "EV_SHADOW_MAX_LIVE_MIN_ESPORTS=420 sets esports' end, nobody else's");
+                        var dota = SP("KXDOTA2GAME-26NOV200600NEMTS-TS", tSc.AddMinutes(-400));      // 6h40 after its listed start
+                        Check(EvSports.OracleTokens(new[] { dota }, cfgSc, tSc).Contains(dota.KalshiTicker + ":a"),
+                              "6h40 after a Dota match's listed start it is still polled");
+                    }
+                    finally { Environment.SetEnvironmentVariable("EV_SHADOW_MAX_LIVE_MIN_ESPORTS", savedEs); }
 
                     var scMix = new[]
                     {

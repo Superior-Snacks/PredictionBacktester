@@ -141,7 +141,8 @@ _NFL_CITY = {
 # A backstop: the catalog flags only soccer three_way today, and the EV bot's incomplete-book check rejects a
 # home/away pair cut from a 3-way book (its prices sum well under 1).
 # Cricket (2026-11-19) too: its catalog series are the limited-overs, 2-way ones; a 3-way (draw) line is a Test's.
-_TWO_WAY_ONLY = {s for k in ("icehockey", "basketball", "cricket") for s in sports_cfg.CATALOG[k].moneyline}
+# Esports (2026-11-19): a best-of-two can end 1-1, and Pinnacle prices that draw; Kalshi's market has two sides.
+_TWO_WAY_ONLY = {s for k in ("icehockey", "basketball", "cricket", "esports") for s in sports_cfg.CATALOG[k].moneyline}
 
 
 # Basketball (2026-10-22): Kalshi writes the club FORM ("BC AEK Athens", "Hapoel Holon BC", "SC Corinthians
@@ -202,11 +203,81 @@ def _cricket_gender_ok(games, ticker: str, event_title: str):
     return [g for g in games if ("women" in _norm(g.get("league_name") or "").split()) == women]
 
 
+# ── ESPORTS: EXACT names once the affixes are off, never containment (2026-11-19) ─────────────────────────────────
+# Kalshi titles a match "Team Spirit vs. Team Nemesis" / "Xtreme Gaming vs. GamerLegion" / "BIG vs. NIP" where
+# Pinnacle lists "Spirit" v "Nemesis" / "Xtreme" v "GamerLegion" / "BIG" v "Ninjas In Pyjamas" (both boards 11-19).
+# Containment, which pairs every other team sport, is unsafe here: an org's ACADEMY or second roster is the org's
+# name plus a word ("Spirit Academy", "paiN Academy", "Falcons Force", "G2 Ares", "MOUZ NXT") and plays in the same
+# tournaments, and "spirit" IS contained in "spirit academy". So both venues' names are cut to a CORE - without "team"
+# / "the" in front or "team" / "gaming" / "esports" / "esport" / "clan" / "club" / "gg" behind - and an esports market
+# pairs only when BOTH cores equal the game's two exactly. A name the strip cannot reach goes in _ESPORTS_ALIASES
+# (core -> core). Nothing else is guessed: a miss stays unpaired and the run says why.
+_ESPORTS_SERIES = set(sports_cfg.CATALOG["esports"].moneyline)
+_ES_SPORTS = {"E SPORTS", "ESPORTS"}          # Pinnacle's name for sport 12 ("E Sports"), as the catalog carries it
+_ES_PREFIX = {"team", "the"}
+_ES_SUFFIX = {"team", "gaming", "esports", "esport", "clan", "club", "gg"}
+_ESPORTS_ALIASES = {"nip": "ninjas in pyjamas",      # Kalshi "NIP" / Pinnacle "Ninjas In Pyjamas" (Stake Ranked, 11-19)
+                    "navi": "natus vincere"}         # the org's own short name; both boards wrote it in full on 11-19
+
+
+def _is_esports(ticker: str) -> bool:
+    return (ticker or "").split("-")[0].upper() in _ESPORTS_SERIES
+
+
+def _esports_core(key: str) -> str:
+    """'team spirit' -> 'spirit', 'xtreme gaming' -> 'xtreme', 'hermine esports club' -> 'hermine', 'nip' -> 'ninjas in
+    pyjamas'; 'spirit academy' stays 'spirit academy'. Takes a _norm()ed name; never strips to nothing."""
+    w = (" " + key + " ").replace(" e sports ", " esports ").split()
+    while len(w) > 1 and w[0] in _ES_PREFIX:
+        w = w[1:]
+    while len(w) > 1 and w[-1] in _ES_SUFFIX:
+        w = w[:-1]
+    core = " ".join(w)
+    return _ESPORTS_ALIASES.get(core, core)
+
+
+def _esports_index(book: dict) -> dict:
+    """The catalog's E Sports games keyed by their two teams' CORES (see above). A same-start duplicate listing
+    collapses to the canonical one, as in index_catalog."""
+    out: dict = {}
+    for games in book.values():
+        for g in games:
+            if (g.get("sport") or "").upper() not in _ES_SPORTS:
+                continue
+            cores = frozenset(_esports_core(k) for k in g["teams"])
+            if len(cores) != 2:
+                continue
+            lst = out.setdefault(cores, [])
+            twin = next((x for x in lst if x["start"] == g["start"]), None)
+            if twin is None:
+                lst.append(g)
+            elif _better_listing(g, twin):
+                lst[lst.index(twin)] = g
+    return out
+
+
+def _name_tok3(x: str) -> set:
+    """The name tokens of 3+ letters that the side checks compare (digits and short words dropped)."""
+    return {w for w in re.sub(r"[^a-z ]", " ", (x or "").lower()).split() if len(w) >= 3}
+
+
+def _names_agree(ticker: str, kalshi_name: str, pin_name: str) -> bool:
+    """Do Kalshi's outcome and a Pinnacle selection name the same competitor? A shared 3+ letter name token, as
+    always - and for esports the exact core the pairing matched on, because a token test both fails real pairs ("OG",
+    "G2", "T1", "M80" have no such token; "NIP" shares none with "Ninjas In Pyjamas") and passes an academy for its
+    first team."""
+    if _is_esports(ticker):
+        return bool(kalshi_name and pin_name) and _esports_core(_norm(kalshi_name)) == _esports_core(_norm(pin_name))
+    return bool(_name_tok3(kalshi_name) & _name_tok3(pin_name))
+
+
 def _canon_team(key: str, ticker: str) -> str:
     """_canon, plus the KXNFLGAME-only "<code> <nickname>" -> "<city> <nickname>" expansion, the basketball
-    club-affix strip above and the cricket gender word. Used for the YES outcome too, so it always lands on the
-    same form as its team."""
+    club-affix strip above, the cricket gender word and the esports core. Used for the YES outcome too, so it
+    always lands on the same form as its team."""
     series = (ticker or "").split("-")[0].upper()
+    if series in _ESPORTS_SERIES:
+        return _esports_core(key)
     if series in _CRICKET_SERIES:
         return _canon(_cricket_core(key))
     if series in _BB_SERIES:
@@ -229,6 +300,9 @@ def _pick_yes_team(outcome: str, team_keys, ticker: str):
     outcome equals one Pinnacle team and only that one, it is that team. The mirror assertion in main() still
     checks that the game's other market lands on the other side."""
     keys = list(team_keys)
+    if _is_esports(ticker):                  # the exact core the game was matched on, or nothing
+        hits = [k for k in keys if _esports_core(k) == outcome]
+        return hits[0] if len(hits) == 1 else None
     got = _pick_book_team(outcome, keys)
     if not got and (ticker or "").split("-")[0].upper() in _BB_SERIES and sum(k == outcome for k in keys) == 1:
         got = outcome
@@ -467,8 +541,7 @@ def _names_from_evidence(e: dict, evd: dict):
     nn = names.get(_designation(e.get("hardven_no_token") or ""))
     if not (yn and nn) or yn == nn:
         return None
-    toks = lambda x: {w for w in re.sub(r"[^a-z ]", " ", (x or "").lower()).split() if len(w) >= 3}
-    if not (toks(e.get("kalshi_outcome") or e.get("outcome") or "") & toks(yn)):
+    if not _names_agree(e.get("kalshi_ticker") or "", e.get("kalshi_outcome") or e.get("outcome") or "", yn):
         return None
     return _book_name(yn), _book_name(nn)
 
@@ -517,6 +590,7 @@ def main() -> None:
               "touch the pair file (an empty catalog would retire every existing pair). Nothing written. ***")
         sys.exit(2)
     book = index_catalog(cat)
+    es_book = _esports_index(book)          # esports matches by exact team-name cores (see _ESPORTS_SERIES)
 
     # From the SAME catalog fetch: leagueId -> (sport, league name) for the tab-manager URL, and
     # matchupId -> ISO start_time so the tab manager can rank gaps by SOONEST game start (near-term games get
@@ -657,7 +731,8 @@ def main() -> None:
         # MATCH: exact team-set first (rare — Kalshi city ≠ Pinnacle full name), then the bipartite matcher.
         # A clean containment (Kalshi ⊆ Pinnacle) scores 100 → treated as exact (no fuzzy tag); only sub-100
         # spelling/word-order variants need --fuzzy and get tagged 'fuzzy':true.
-        raw = book.get(teams)
+        es = _is_esports(tk)
+        raw = (es_book if es else book).get(teams)
         games = [g for g in raw if g.get("sport", "").upper() in expected] if (raw and expected) else raw
         # Cricket: only the games in a league of the match's gender (see _CRICKET_SERIES).
         title = e.get("event_title") or ""
@@ -666,7 +741,12 @@ def main() -> None:
         is_fuzzy, fscore = False, 100
         if not games:
             thr = args.fuzzy_threshold if args.fuzzy else 100   # without --fuzzy, accept only clean containment
-            cand, fscore = _best_book_game(teams, book, thr, expected)
+            if es:
+                # Esports pairs EXACT cores only - no containment, no --fuzzy (an academy contains its org's name).
+                # The best leg is scored for the message alone.
+                cand, fscore = None, _best_book_game(teams, es_book, 101, expected)[1]
+            else:
+                cand, fscore = _best_book_game(teams, book, thr, expected)
             if cand:
                 kept_g = _cricket_gender_ok(cand, tk, title)
                 gender_cut, cand = gender_cut or not kept_g, kept_g
@@ -680,6 +760,10 @@ def main() -> None:
                 anchor_rejected += 1
                 unmatched.append(f"{tk}  {sorted(teams)} (teams matched but no "
                                  f"{'/'.join(sorted(expected))} game — league-anchored out)")
+            elif es and fscore >= args.fuzzy_threshold:
+                unmatched.append(f"{tk}  {sorted(teams)} (best leg {fscore:.0f}: a name differs from Pinnacle's - "
+                                 f"esports pairs exact names only, since an academy is its org's name plus a word; "
+                                 f"if it is the same team, add it to _ESPORTS_ALIASES)")
             elif fscore >= args.fuzzy_threshold:
                 unmatched.append(f"{tk}  {sorted(teams)} (best leg {fscore:.0f}; pass --fuzzy to accept)")
             else:
@@ -696,9 +780,11 @@ def main() -> None:
         # A KALSHI 2-WAY MARKET MUST NOT PAIR A PINNACLE 3-WAY LINE. Kalshi's hockey markets settle on the WINNER,
         # overtime and shootout included; a 3-way (home/draw/away) moneyline is regulation time, a different bet
         # whose draw leg would be de-vigged into a confidently wrong P_true. Refuse rather than guess.
-        if entry["three_way"] and tk.split("-")[0].upper() in _TWO_WAY_ONLY:
-            unmatched.append(f"{tk}  {sorted(teams)} (Pinnacle's line is 3-way/regulation; Kalshi settles "
-                             f"incl. OT - refused)")
+        # The same for a line that prices a DRAW at all (an esports best-of-two, a cricket Test): the catalog flags
+        # any matchup whose full-game moneyline carries one (pinnacle_adapter, 2026-11-19).
+        if (entry["three_way"] or entry.get("draw")) and tk.split("-")[0].upper() in _TWO_WAY_ONLY:
+            unmatched.append(f"{tk}  {sorted(teams)} (Pinnacle's line is 3-way - it prices a draw or regulation "
+                             f"time; Kalshi's market has two sides - refused)")
             continue
         # 2-way markets are mirrors → fill one per event; 3-way outcomes are DISTINCT → fill all.
         if not entry["three_way"] and not args.both and e.get("event_id") in done_events:
@@ -897,15 +983,13 @@ def main() -> None:
     raw_names = {s_.get("selection_id"): (s_.get("selection_name") or "")
                  for s_ in cat if s_.get("selection_id")}
 
-    def _ntok(x: str) -> set:
-        return {w for w in re.sub(r"[^a-z ]", " ", (x or "").lower()).split() if len(w) >= 3}
-
     named_side = set()
     for e in pairs:
-        _out = _ntok(e.get("kalshi_outcome") or e.get("outcome") or "")
+        _tk = e.get("kalshi_ticker") or ""
+        _out = e.get("kalshi_outcome") or e.get("outcome") or ""
         _py = raw_names.get(e.get("hardven_yes_token") or "")
         _pn = raw_names.get(e.get("hardven_no_token") or "")
-        if _out and _py and _pn and (_out & _ntok(_py)) and not (_out & _ntok(_pn)):
+        if _out and _py and _pn and _names_agree(_tk, _out, _py) and not _names_agree(_tk, _out, _pn):
             named_side.add(id(e))
     kept_ids = {id(e) for rec, e in kept_log if rec["decision"] == "kept"}
     gate = (0, 0, 0, 0)
@@ -947,7 +1031,8 @@ def main() -> None:
     #
     # Name TOKENS, not substrings: "Felipe Meligeni Alves" vs "Felipe Meligeni Rodrigues Alves" and
     # "Jazmin Ortenzi" vs "Jasmin Ortenzi" are the same player, and a substring test strips both (it did).
-    # (`raw_names` and `_ntok` are built above the price gate, which uses them too.)
+    # (`raw_names` is built above the price gate, which uses it too; `_names_agree` is the shared test - for esports
+    # the exact name core the pairing matched on, since "OG" / "G2" / "T1" carry no 3-letter token at all.)
     misoriented = 0
     for e in pairs:
         yt = e.get("hardven_yes_token") or ""
@@ -955,7 +1040,7 @@ def main() -> None:
         pin = raw_names.get(yt)
         if not (yt and out and pin):
             continue                      # unpaired, or the token is not on the board now -> cannot judge
-        if _ntok(out) & _ntok(pin):
+        if _names_agree(e.get("kalshi_ticker") or "", out, pin):
             continue                      # shares a name token => same player
         misoriented += 1
         print(f"[PAIR] MIS-ORIENTED {e.get('kalshi_ticker','?')}: Kalshi outcome '{out}' but the YES token "

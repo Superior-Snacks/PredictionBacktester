@@ -141,8 +141,20 @@ CATALOG: dict[str, Sport] = {
         bia_sport="cricket", bia_path="/sportsbook/cricket", enabled=False,
     ),
     "esports": Sport(
-        key="esports", pinnacle_id=0, duration_min=180,
-        moneyline=("KXLOLGAME", "KXCS2GAME", "KXVALORANTGAME", "KXDOTA2GAME", "KXR6GAME", "KXXAIGAME"),
+        # pinnacle_id 12 = Pinnacle "E Sports", CONFIRMED 2026-11-19 (guest /sports: 6 leagues, 16 matchups). For
+        # KalshiEvBot SHADOW telemetry. Pinnacle files each TOURNAMENT as its own league ("CS2 - STK Ranked",
+        # "Dota 2 - BLAST Slam") and lists a match about a day ahead; in play it issues a live child on the
+        # pre-match parentId (liveMode live_delay), as for tennis, next to a "(Kills)" twin - see pinnacle_adapter
+        # _TWIN_UNITS. Kalshi's per-match series, one 2-market event per match ("A vs. B", HHMM in the ticker).
+        # HARDVEN_SERIES_ALLOW picks which pair (CS2 + Dota 2 + LoL + Valorant at the start, chosen off Kalshi's
+        # history 2026-11-19: CS2 ~49 matches/day, the big events trading in play like tennis at 1c; LoL the
+        # deepest of all but off-season until mid-January; R6 / CoD / Overwatch / MLBB thin or seasonal).
+        # Kalshi settles a match cancelled, postponed 48h+ or forfeited before play at a "fair market price"
+        # (Pinnacle voids). KXEBASKETBALLGAME / KXESOCCERGAME / KXEFOOTBALLGAME are simulations with ties or a
+        # 3-way, not listed. (KXXAIGAME, listed here 2026-08-10, no longer exists as a Sports series.)
+        key="esports", pinnacle_id=12, duration_min=300,   # a BO3 runs ~2-4h, a Dota BO3/BO5 up to ~6h
+        moneyline=("KXCS2GAME", "KXDOTA2GAME", "KXLOLGAME", "KXVALORANTGAME", "KXR6GAME", "KXCODGAME",
+                   "KXOWGAME", "KXMLBBGAME", "KXROCKETLEAGUEGAME"),
         bia_sport="esports", bia_path="/sportsbook/esports", enabled=False,
     ),
     "mma": Sport(
@@ -325,6 +337,16 @@ PINNACLE_LEAGUES: dict[str, tuple[str, ...]] = {
     "KXSHLGAME": ("sweden - shl",),               # *
     "KXLIIGAGAME": ("sm liiga",),                 # * "Finland - SM Liiga"
     "KXDELGAME": ("germany - del$",),             # *
+    # esports (2026-11-19) - Pinnacle names a league "<game> - <tournament>", one per tournament
+    "KXCS2GAME": ("^cs2", "^counter-strike", "^counter strike"),   # * "CS2 - STK Ranked", "CS2 - Elisa Open Suomi"
+    "KXDOTA2GAME": ("^dota 2", "^dota2"),         # * "Dota 2 - BLAST Slam", "Dota 2 - European Pro League"
+    "KXLOLGAME": ("^league of legends", "^lol"),
+    "KXVALORANTGAME": ("^valorant",),
+    "KXR6GAME": ("^rainbow six", "^r6"),
+    "KXCODGAME": ("^call of duty",),
+    "KXOWGAME": ("^overwatch",),
+    "KXMLBBGAME": ("^mobile legends", "^mlbb"),
+    "KXROCKETLEAGUEGAME": ("^rocket league",),
 }
 
 
