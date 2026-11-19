@@ -40,6 +40,14 @@ public static class EvSports
         ["KXKHLGAME"] = "hockey", ["KXSHLGAME"] = "hockey", ["KXLIIGAGAME"] = "hockey", ["KXDELGAME"] = "hockey",
         ["KXAHLGAME"] = "hockey", ["KXNCAAHGAME"] = "hockey", ["KXNCAAHOCKEYGAME"] = "hockey",
         ["KXEUCHLGAME"] = "hockey", ["KXIIHFGAME"] = "hockey",
+        // Cricket (2026-11-19, the shadow). The "...MATCH" series would read "other" and the franchise leagues'
+        // "...GAME" (IPL, PSL, WPL) soccer. Every Kalshi cricket match series, paired or not.
+        ["KXT20MATCH"] = "cricket", ["KXWT20MATCH"] = "cricket", ["KXODIMATCH"] = "cricket",
+        ["KXWODIMATCH"] = "cricket", ["KXTESTMATCH"] = "cricket", ["KXWTESTMATCH"] = "cricket",
+        ["KXT10MATCH"] = "cricket", ["KXWT10MATCH"] = "cricket", ["KXIPLGAME"] = "cricket",
+        ["KXPSLGAME"] = "cricket", ["KXWPLGAME"] = "cricket", ["KXCPLMATCH"] = "cricket",
+        ["KXHUNDREDMATCH"] = "cricket", ["KXWHUNDREDMATCH"] = "cricket", ["KXLPLMATCH"] = "cricket",
+        ["KXT20CANADAMATCH"] = "cricket", ["KXSSHIELDMATCH"] = "cricket", ["KXCOUNTYCHAMPMATCH"] = "cricket",
     };
 
     /// <summary>Coarse sport from the Kalshi SERIES (the ticker up to its first '-'). Matching on the series
@@ -78,7 +86,7 @@ public static class EvSports
     /// scope pass all use this, so they can never disagree about what is polled.</summary>
     public static List<string> OracleTokens(IEnumerable<EvPair> pairs, EvConfig cfg, DateTime nowUtc)
         => pairs.Where(p => p.IsDerivative || cfg.IsLiveSport(p.KalshiTicker) || !cfg.ShadowNearOnly
-                            || ShadowActive(p, nowUtc, cfg.ShadowLeadMin, cfg.ShadowMaxLiveMin))
+                            || ShadowActive(p, nowUtc, cfg.ShadowLeadMin, cfg.ShadowMaxLiveMinFor(p.KalshiTicker)))
                 .SelectMany(p => p.Legs).Distinct(StringComparer.Ordinal).ToList();
 
     /// <summary>Which pipeline each pair belongs to: derivatives to their own; moneylines of a LIVE sport to

@@ -140,7 +140,8 @@ _NFL_CITY = {
 # hockey and basketball series in the unified catalog - derived, so a series added to sports.py is covered too.
 # A backstop: the catalog flags only soccer three_way today, and the EV bot's incomplete-book check rejects a
 # home/away pair cut from a 3-way book (its prices sum well under 1).
-_TWO_WAY_ONLY = {s for k in ("icehockey", "basketball") for s in sports_cfg.CATALOG[k].moneyline}
+# Cricket (2026-11-19) too: its catalog series are the limited-overs, 2-way ones; a 3-way (draw) line is a Test's.
+_TWO_WAY_ONLY = {s for k in ("icehockey", "basketball", "cricket") for s in sports_cfg.CATALOG[k].moneyline}
 
 
 # Basketball (2026-10-22): Kalshi writes the club FORM ("BC AEK Athens", "Hapoel Holon BC", "SC Corinthians
@@ -164,10 +165,50 @@ def _bb_core(key: str) -> str:
     return " ".join(w)
 
 
+# ── CRICKET: men's and women's sides share their names on Pinnacle (2026-11-19) ────────────────────────────────
+# Pinnacle names a women's side exactly like the men's ("Pakistan", "Adelaide Strikers") and says "Women" only in
+# the LEAGUE ("Twenty20 International - Women", "Australia - Twenty20 Big Bash Women"; guest board 11-19), while
+# Kalshi writes "Adelaide Strikers Women" and files women's matches under their own series. So the Kalshi name
+# loses its "Women" (else it could never match), and every candidate game must sit in a league of the match's
+# gender - else a men's market could take the women's game of the same two nations or clubs. The Hundred and the
+# Big Bash play double-headers: same clubs, same day, the women's game a few hours before the men's.
+_CRICKET_SERIES = set(sports_cfg.CATALOG["cricket"].moneyline) | {
+    "KXTESTMATCH", "KXWTESTMATCH", "KXSSHIELDMATCH", "KXCOUNTYCHAMPMATCH", "KXT20CANADAMATCH", "KXT10MATCH",
+    "KXWT10MATCH"}
+_CRICKET_WOMEN = {"KXWT20MATCH", "KXWODIMATCH", "KXWHUNDREDMATCH", "KXWPLGAME", "KXWTESTMATCH", "KXWT10MATCH"}
+_CRICKET_GENDER_WORDS = {"women", "womens", "w", "men", "mens"}
+
+
+def _cricket_core(key: str) -> str:
+    """'adelaide strikers women' -> 'adelaide strikers', 'northern districts men' -> 'northern districts'.
+    Never strips to nothing ('w' alone stays)."""
+    w = key.split()
+    while len(w) > 1 and w[-1] in _CRICKET_GENDER_WORDS:
+        w = w[:-1]
+    return " ".join(w)
+
+
+def _cricket_women(ticker: str, event_title: str) -> bool:
+    """A women's match: its series says so, or Kalshi's event title does."""
+    return ((ticker or "").split("-")[0].upper() in _CRICKET_WOMEN
+            or "women" in _norm(event_title or "").split())
+
+
+def _cricket_gender_ok(games, ticker: str, event_title: str):
+    """Only the games in a Pinnacle league of the match's gender (cricket only; anything else passes untouched)."""
+    if not games or (ticker or "").split("-")[0].upper() not in _CRICKET_SERIES:
+        return games
+    women = _cricket_women(ticker, event_title)
+    return [g for g in games if ("women" in _norm(g.get("league_name") or "").split()) == women]
+
+
 def _canon_team(key: str, ticker: str) -> str:
-    """_canon, plus the KXNFLGAME-only "<code> <nickname>" -> "<city> <nickname>" expansion and the basketball
-    club-affix strip above. Used for the YES outcome too, so it always lands on the same form as its team."""
+    """_canon, plus the KXNFLGAME-only "<code> <nickname>" -> "<city> <nickname>" expansion, the basketball
+    club-affix strip above and the cricket gender word. Used for the YES outcome too, so it always lands on the
+    same form as its team."""
     series = (ticker or "").split("-")[0].upper()
+    if series in _CRICKET_SERIES:
+        return _canon(_cricket_core(key))
     if series in _BB_SERIES:
         aliased = _canon(key)
         return aliased if aliased != key else _bb_core(key)
@@ -618,14 +659,24 @@ def main() -> None:
         # spelling/word-order variants need --fuzzy and get tagged 'fuzzy':true.
         raw = book.get(teams)
         games = [g for g in raw if g.get("sport", "").upper() in expected] if (raw and expected) else raw
+        # Cricket: only the games in a league of the match's gender (see _CRICKET_SERIES).
+        title = e.get("event_title") or ""
+        gender_cut = bool(games) and not _cricket_gender_ok(games, tk, title)
+        games = _cricket_gender_ok(games, tk, title)
         is_fuzzy, fscore = False, 100
         if not games:
             thr = args.fuzzy_threshold if args.fuzzy else 100   # without --fuzzy, accept only clean containment
             cand, fscore = _best_book_game(teams, book, thr, expected)
             if cand:
+                kept_g = _cricket_gender_ok(cand, tk, title)
+                gender_cut, cand = gender_cut or not kept_g, kept_g
+            if cand:
                 games, is_fuzzy = cand, fscore < 100
         if not games:
-            if raw and expected:                     # teams matched but no game in the expected sport
+            if gender_cut:
+                unmatched.append(f"{tk}  {sorted(teams)} (Pinnacle lists these teams only in a "
+                                 f"{'men' if _cricket_women(tk, title) else 'women'}'s league - refused)")
+            elif raw and expected:                   # teams matched but no game in the expected sport
                 anchor_rejected += 1
                 unmatched.append(f"{tk}  {sorted(teams)} (teams matched but no "
                                  f"{'/'.join(sorted(expected))} game — league-anchored out)")

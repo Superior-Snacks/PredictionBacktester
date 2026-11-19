@@ -220,6 +220,12 @@ SERIES_SPORT = {
     "KXATPCHALLENGERMATCH": {"TENNIS"}, "KXWTACHALLENGERMATCH": {"TENNIS"},
     "KXT20MATCH": {"CRICKET"}, "KXWT20MATCH": {"CRICKET"}, "KXODIMATCH": {"CRICKET"},
     "KXTESTMATCH": {"CRICKET"}, "KXCOUNTYCHAMPMATCH": {"CRICKET"},
+    # The rest of Kalshi's cricket match series (2026-11-19, the cricket shadow). The franchise leagues end in
+    # "GAME" like a soccer or basketball club's series, and their clubs' names are not unique across sports.
+    "KXWODIMATCH": {"CRICKET"}, "KXWTESTMATCH": {"CRICKET"}, "KXIPLGAME": {"CRICKET"}, "KXPSLGAME": {"CRICKET"},
+    "KXWPLGAME": {"CRICKET"}, "KXCPLMATCH": {"CRICKET"}, "KXHUNDREDMATCH": {"CRICKET"},
+    "KXWHUNDREDMATCH": {"CRICKET"}, "KXLPLMATCH": {"CRICKET"}, "KXT20CANADAMATCH": {"CRICKET"},
+    "KXSSHIELDMATCH": {"CRICKET"}, "KXT10MATCH": {"CRICKET"}, "KXWT10MATCH": {"CRICKET"},
     "KXBOXING": {"BOXING"}, "KXUFCFIGHT": {"MARTIAL ARTS"},
 }
 

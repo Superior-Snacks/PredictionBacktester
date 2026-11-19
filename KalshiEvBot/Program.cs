@@ -442,8 +442,14 @@ internal static class Program
                             + "from the first row; graded by --resolve-shadow.");
             Console.WriteLine(cfg.ShadowNearOnly
                 ? $"[SHADOW ] scope: a shadow game is polled only from {cfg.ShadowLeadMin:0} min before its listed start "
-                + $"to {cfg.ShadowMaxLiveMin:0} min after (EV_SHADOW_NEAR_ONLY / _LEAD_MIN / _MAX_LIVE_MIN) - "
-                + $"{shPairs.Count(p => EvSports.ShadowActive(p, DateTime.UtcNow, cfg.ShadowLeadMin, cfg.ShadowMaxLiveMin))} in scope now."
+                + $"to {cfg.ShadowMaxLiveMin:0} min after (EV_SHADOW_NEAR_ONLY / _LEAD_MIN / _MAX_LIVE_MIN"
+                + string.Concat(Environment.GetEnvironmentVariables().Keys.Cast<string>()
+                        .Where(k => k.StartsWith("EV_SHADOW_MAX_LIVE_MIN_", StringComparison.OrdinalIgnoreCase))
+                        .OrderBy(k => k, StringComparer.Ordinal)
+                        .Select(k => $"; {k["EV_SHADOW_MAX_LIVE_MIN_".Length..].ToLowerInvariant()} "
+                                   + $"{cfg.ShadowMaxLiveMinForSport(k["EV_SHADOW_MAX_LIVE_MIN_".Length..]):0} min"))
+                + ") - "
+                + $"{shPairs.Count(p => EvSports.ShadowActive(p, DateTime.UtcNow, cfg.ShadowLeadMin, cfg.ShadowMaxLiveMinFor(p.KalshiTicker)))} in scope now."
                 : "[SHADOW ] scope: OFF (EV_SHADOW_NEAR_ONLY=0) - every shadow pair is polled from the moment it is paired.");
         }
 
@@ -1398,7 +1404,7 @@ internal static class Program
                     all.AddRange(shadow);
                     (added, removed) = oracle.SetTokens(EvSports.OracleTokens(all, cfg, now));
                 }
-                int inScope = shadow.Count(p => EvSports.ShadowActive(p, now, cfg.ShadowLeadMin, cfg.ShadowMaxLiveMin));
+                int inScope = shadow.Count(p => EvSports.ShadowActive(p, now, cfg.ShadowLeadMin, cfg.ShadowMaxLiveMinFor(p.KalshiTicker)));
                 if (inScope != lastInScope || added > 0 || removed > 0)
                     Console.WriteLine($"[SHADOW ] scope: {inScope} of {shadow.Count} shadow pair(s) near or in play "
                                     + $"(+{added}/-{removed} Pinnacle selection(s); {oracle.TokenCount} polled in total).");

@@ -127,9 +127,17 @@ CATALOG: dict[str, Sport] = {
         bia_sport="af", bia_path="/sportsbook/american-football", enabled=False,
     ),
     "cricket": Sport(
-        key="cricket", pinnacle_id=0, duration_min=480,   # T20 ~4h but ODI runs ~8h — sized for the long form
-        moneyline=("KXT20MATCH", "KXWT20MATCH", "KXODIMATCH", "KXCPLMATCH",
-                   "KXHUNDREDMATCH", "KXWHUNDREDMATCH"),
+        # pinnacle_id 8 = Pinnacle "Cricket", CONFIRMED 2026-11-19 (guest /sports: 3 leagues, 7 matchups; Pinnacle
+        # lists only leagues that have games, so the walk stays a few requests). For KalshiEvBot SHADOW telemetry.
+        # LIMITED-OVERS, 2-WAY series only, chosen off Kalshi's own history (2026-11-19, 3,316 settled matches,
+        # in-play spread ~1c on the big leagues and ~2c on a typical match, like ITF). NOT listed: the Tests
+        # (KXTESTMATCH/KXWTESTMATCH: 3-way + multi-day, and a 2-market Test settles a draw at $0.50), the thin
+        # first-class ones (KXCOUNTYCHAMPMATCH, KXSSHIELDMATCH: 13-18c spreads), KXT20CANADAMATCH (15c) and
+        # KXT10MATCH (new, unmeasured). Kalshi settles a tie / no result / abandonment at $0.50 on every market;
+        # Pinnacle voids those bets. Men's and women's sides share their names on Pinnacle - see pair_pinnacle.
+        key="cricket", pinnacle_id=8, duration_min=480,   # T20 ~4h but ODI runs ~8h — sized for the long form
+        moneyline=("KXT20MATCH", "KXWT20MATCH", "KXODIMATCH", "KXWODIMATCH", "KXIPLGAME", "KXPSLGAME",
+                   "KXWPLGAME", "KXCPLMATCH", "KXHUNDREDMATCH", "KXWHUNDREDMATCH", "KXLPLMATCH"),
         bia_sport="cricket", bia_path="/sportsbook/cricket", enabled=False,
     ),
     "esports": Sport(

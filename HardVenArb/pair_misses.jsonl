@@ -15,3 +15,4 @@
 {"event_id": "KXITFMATCH-26NOV19MILMAS", "tickers": ["KXITFMATCH-26NOV19MILMAS-MAS", "KXITFMATCH-26NOV19MILMAS-MIL"], "kalshi": "Milev vs Mashtakov", "players": ["mashtakov", "milev"], "board": {"token": "210595:1640689152:home", "league": "ITF Men Heraklion - R16", "start": "2026-11-19T07:46:40Z", "names": ["nikita mashtakov", "yanaki milev"]}, "why": "paired by this run's matcher, then cleared later in it (price gate / name audit / mirror check)", "at": "2026-11-19T08:31:32Z"}
 {"at": "2026-11-19T10:02:53Z", "run": {"misses": 0}}
 {"at": "2026-11-19T11:34:07Z", "run": {"misses": 0}}
+{"at": "2026-11-19T13:05:17Z", "run": {"misses": 0}}

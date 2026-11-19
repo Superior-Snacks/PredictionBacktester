@@ -958,6 +958,16 @@ public static class SelfTest
             try
             {
                 // THE CLASSIFIER reads the SERIES, never the whole ticker.
+                // Cricket (2026-11-19): every series reads cricket - "...MATCH" was "other", IPL/PSL/WPL's "...GAME" soccer.
+                Check(new[] { "KXT20MATCH-26NOV200310ADSMR-ADS", "KXWT20MATCH-26NOV150000NEDPAK-PAK",
+                              "KXODIMATCH-26NOV180230IREAZIMA-IRE", "KXWODIMATCH-26NOV141630WBAH-WBA",
+                              "KXIPLGAME-26MAY291000RRGT-RR", "KXPSLGAME-26MAY03HYDPZA-HYD", "KXWPLGAME-26FEB05DELROY-DEL",
+                              "KXCPLMATCH-26SEP201900JAMANT-JAM", "KXHUNDREDMATCH-26AUG161300MSGTRE-MSG",
+                              "KXWHUNDREDMATCH-26AUG160915SUNTRE-SUN", "KXLPLMATCH-26AUG081000GALJAF-GAL",
+                              "KXTESTMATCH-26NOV150300BANSA-TIE" }.All(t => EvSports.Of(t) == "cricket"),
+                      "every cricket series is cricket (not 'other', not soccer)");
+                Check(!EvSports.ParseLive(null).Contains("cricket") && !new EvConfig().IsLiveSport("KXIPLGAME-X-RR"),
+                      "cricket is NOT a live sport by default - shadow only until EV_LIVE_SPORTS names it");
                 Check(EvSports.Of("KXNFLGAME-26OCT11KCBUF-KC") == "football", "an NFL market is football");
                 Check(EvSports.Of("KXNCAAFGAME-26OCT10ALAUGA-ALA") == "football", "an NCAAF market is football");
                 Check(EvSports.Of("KXMLBGAME-26OCT08NYYTOR-NYY") == "baseball", "an MLB market is baseball");
@@ -1089,6 +1099,29 @@ public static class SelfTest
                     Check(!InScope(-360), "6h past its start it is out again - finished, nothing left to price");
                     Check(EvSports.ShadowActive(SP("KXNFLGAME-X-KC", null), tSc, 30, 300),
                           "an UNKNOWN start is always in scope (a missing field costs polling, never coverage)");
+
+                    // PER-SPORT END (2026-11-19): EV_SHADOW_MAX_LIVE_MIN_CRICKET keeps a one-day international (7-9 h) in
+                    // scope; every other sport keeps the global value.
+                    string? savedCr = Environment.GetEnvironmentVariable("EV_SHADOW_MAX_LIVE_MIN_CRICKET");
+                    try
+                    {
+                        Environment.SetEnvironmentVariable("EV_SHADOW_MAX_LIVE_MIN_CRICKET", null);
+                        Check(cfgSc.ShadowMaxLiveMinFor("KXODIMATCH-X-IND") == 300,
+                              "no per-sport value: cricket uses the global end");
+                        Environment.SetEnvironmentVariable("EV_SHADOW_MAX_LIVE_MIN_CRICKET", "600");
+                        Check(cfgSc.ShadowMaxLiveMinFor("KXODIMATCH-X-IND") == 600
+                              && cfgSc.ShadowMaxLiveMinFor("KXIPLGAME-X-RR") == 600
+                              && cfgSc.ShadowMaxLiveMinForSport("cricket") == 600,
+                              "EV_SHADOW_MAX_LIVE_MIN_CRICKET=600 sets cricket's end");
+                        Check(cfgSc.ShadowMaxLiveMinFor("KXNFLGAME-X-KC") == 300,
+                              "...and leaves every other sport on the global end");
+                        var odi = SP("KXODIMATCH-26NOV180230IREAZIMA-IRE", tSc.AddMinutes(-420));   // 7 h into an ODI
+                        var nfl = SP("KXNFLGAME-26OCT18-KC", tSc.AddMinutes(-420));
+                        var pol = EvSports.OracleTokens(new[] { odi, nfl }, cfgSc, tSc).ToHashSet();
+                        Check(pol.Contains(odi.KalshiTicker + ":a") && !pol.Contains(nfl.KalshiTicker + ":a"),
+                              "7 h after the start an ODI is still polled, an NFL game is not");
+                    }
+                    finally { Environment.SetEnvironmentVariable("EV_SHADOW_MAX_LIVE_MIN_CRICKET", savedCr); }
 
                     var scMix = new[]
                     {

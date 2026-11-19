@@ -28,16 +28,20 @@ from mock_adapter import MockBookAdapter
 load_dotenv_upwards()
 
 
-# Quiet uvicorn's access log for the /odds poll: the bot hits it every ~2s, so the line fires constantly
-# and buries the [BOOKMAKER] diagnostics. We drop ONLY /odds; other endpoints (/catalog, /health, /balance)
-# still log. The access record's args are (client, method, full_path, http_version, status). Set
-# HARDVEN_LOG_ODDS=1 to keep them.
+# Quiet uvicorn's access log for the bot's machine polls: they fire constantly and bury the [PINNACLE]
+# diagnostics. /odds is polled every ~2s; /debug/redirect is the in-play watch (KalshiEvBot/InPlayWatch.cs, from
+# 2026-11-18) asking once a minute about each tennis match it is not seeing live - 23k of the 26k lines of the
+# 11-18/19 run; /debug/schedule is the bot's window poll. Only these are dropped; other endpoints (/catalog,
+# /health, /balance, /debug/inplay...) still log. The access record's args are (client, method, full_path,
+# http_version, status). Set HARDVEN_LOG_ODDS=1 to keep them all.
+_QUIET_ACCESS_PATHS = ("/odds", "/debug/redirect", "/debug/schedule")
+
 if os.environ.get("HARDVEN_LOG_ODDS") != "1":
     class _SuppressOddsAccessLog(logging.Filter):
         def filter(self, record: logging.LogRecord) -> bool:
             a = record.args
             return not (isinstance(a, tuple) and len(a) >= 3 and isinstance(a[2], str)
-                        and a[2].startswith("/odds"))
+                        and a[2].split("?", 1)[0] in _QUIET_ACCESS_PATHS)
     logging.getLogger("uvicorn.access").addFilter(_SuppressOddsAccessLog())
 
 

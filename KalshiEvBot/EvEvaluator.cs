@@ -102,6 +102,13 @@ public sealed class EvConfig
     public bool   ShadowNearOnly   = Env("EV_SHADOW_NEAR_ONLY", 1) > 0.5;
     public double ShadowLeadMin    = Env("EV_SHADOW_LEAD_MIN", 30);
     public double ShadowMaxLiveMin = Env("EV_SHADOW_MAX_LIVE_MIN", 300);
+    /// <summary>The scope's end for this market's sport: EV_SHADOW_MAX_LIVE_MIN_{SPORT} (e.g. _CRICKET) if set, else
+    /// EV_SHADOW_MAX_LIVE_MIN. Added 2026-11-19 for cricket: a one-day international runs 7-9 h, so the 240 that
+    /// suits the other shadow sports would drop its whole second innings. Read per call (cheap), so a clone
+    /// carrying its own ShadowMaxLiveMin keeps it as the fallback.</summary>
+    public double ShadowMaxLiveMinFor(string? ticker) => ShadowMaxLiveMinForSport(EvSports.Of(ticker));
+    public double ShadowMaxLiveMinForSport(string sport)
+        => Env($"EV_SHADOW_MAX_LIVE_MIN_{sport.ToUpperInvariant()}", ShadowMaxLiveMin);
     /// <summary>How far below EvMin a WS-implied EV may sit and still buy a REST call. The WS ask is
     /// optimistic 95% of the time, which makes WS EV an upper bound and pre-screening safe; this slack
     /// covers the other 5%.</summary>
