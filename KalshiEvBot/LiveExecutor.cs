@@ -148,6 +148,38 @@ public sealed class LiveExecutor
     public long ContractCapped;
     public decimal StakedUsd;
 
+    // ── CAPS THAT SCALE WITH THE ACCOUNT (2026-11-23) ─────────────────────────────────────────────────
+    // The fixed dollar caps came off so Kelly grows with the account by itself; the per-game and daily bounds
+    // that remain are shares of the SAME equity Kelly sizes on (after EquityGuard's balance check), read live.
+    /// <summary>The day's sizing equity (EvEvaluator.LiveEquityUsd), wired by EvEvaluator.EnableLive. Null = 0,
+    /// which leaves only the fixed caps.</summary>
+    public Func<double>? EquitySource { get; set; }
+    private double EquityNow => EquitySource?.Invoke() ?? 0.0;
+
+    /// <summary>The per-game cap in force: EV_LIVE_STAKE_GAME when set, else room for TWO FULL BETS at today's
+    /// equity (2 x EV_MAX_TRADE_FRACTION). With re-entry off a game holds at most one bet per side, so the derived
+    /// cap never cuts a Kelly stake; it exists so 0 can mean "scale with the account" instead of "no orders".</summary>
+    internal decimal GameCapUsd => EffectiveGameCapUsd(_cfg.LiveStakePerGameUsd, _cfg.MaxTradeFrac, EquityNow);
+
+    internal static decimal EffectiveGameCapUsd(double fixedUsd, double maxTradeFrac, double equityUsd)
+        => fixedUsd > 0 ? (decimal)fixedUsd
+         : equityUsd > 0 && maxTradeFrac > 0 ? (decimal)(2.0 * maxTradeFrac * equityUsd) : 0m;
+
+    /// <summary>The day's stop in force: EV_LIVE_DAILY_USD and EV_LIVE_DAILY_FRAC x today's equity, the smaller of
+    /// whichever are set. 0 = no daily stop.</summary>
+    internal decimal DailyCapUsd => EffectiveDailyCapUsd(_cfg.LiveDailyUsd, _cfg.LiveDailyFrac, EquityNow);
+
+    internal static decimal EffectiveDailyCapUsd(double fixedUsd, double frac, double equityUsd)
+    {
+        decimal cap = fixedUsd > 0 ? (decimal)fixedUsd : 0m;
+        if (frac > 0 && equityUsd > 0)
+        {
+            decimal share = (decimal)(frac * equityUsd);
+            cap = cap > 0 ? Math.Min(cap, share) : share;
+        }
+        return cap;
+    }
+
     public LiveExecutor(KalshiOrderClient kalshi, EvLiveLog log, EvConfig cfg, LivePositionStore? store = null)
     {
         _kalshi = kalshi;
@@ -203,8 +235,7 @@ public sealed class LiveExecutor
         // FLAT: the per-side cap, bounded by the game's remaining room. Unchanged.
         if (kellyStakeUsd <= 0)
         {
-            decimal flatRoom = Math.Min((decimal)_cfg.LiveStakePerSideUsd,
-                                        (decimal)_cfg.LiveStakePerGameUsd - spent);
+            decimal flatRoom = Math.Min((decimal)_cfg.LiveStakePerSideUsd, GameCapUsd - spent);
             return flatRoom <= 0 ? 0 : (int)Math.Floor(flatRoom / (decimal)limitPrice);
         }
 
@@ -212,13 +243,14 @@ public sealed class LiveExecutor
         // as BACKSTOPS — but the whole point of this mode is that Kelly is what decides the size, so when a
         // cap cuts it we say so out loud. A cap that silently binds turns Kelly sizing into flat sizing
         // wearing Kelly's name, and nothing in the telemetry would show the difference.
-        decimal stake = GameBoundStake((decimal)kellyStakeUsd, (decimal)_cfg.LiveStakePerGameUsd, spent,
-                                       (decimal)_cfg.LiveKellyMinUsd);
+        decimal gameCap = GameCapUsd;
+        decimal stake = GameBoundStake((decimal)kellyStakeUsd, gameCap, spent, (decimal)_cfg.LiveKellyMinUsd);
         if (stake <= 0) return 0;
         if (stake < (decimal)kellyStakeUsd)
             Con.Line(ConsoleColor.DarkYellow,
                 $"[SIZE ] per-game cap cut Kelly ${kellyStakeUsd:0.00} -> ${stake:0.00} on {eventId} "
-              + $"(EV_LIVE_STAKE_GAME={_cfg.LiveStakePerGameUsd:0.00}). Kelly is no longer the binding constraint.");
+              + $"(game cap ${gameCap:0.00}{(_cfg.LiveStakePerGameUsd > 0 ? ", EV_LIVE_STAKE_GAME" : ", two full bets at today's equity")}). "
+              + "Kelly is no longer the binding constraint.");
         int want = EvMath.ContractsFor((double)stake, limitPrice, feeM);
         int got  = EvMath.ContractsFor((double)stake, limitPrice, feeM, _cfg.LiveMaxContracts);
         if (got < want)
@@ -261,14 +293,16 @@ public sealed class LiveExecutor
 
         // THE DAY'S HARD STOP. Per-side and per-game caps bound ONE market; nothing bounded the day, and
         // an unattended run turns the shard float over repeatedly as settlements return cash. Checked first
-        // because once it binds nothing else matters. 0 disables it.
-        if (_cfg.LiveDailyUsd > 0 && SpentToday >= (decimal)_cfg.LiveDailyUsd)
+        // because once it binds nothing else matters. 0 disables it. Since 2026-11-23 the stop can be a share of
+        // the day's equity (EV_LIVE_DAILY_FRAC), so it grows with the account instead of freezing turnover.
+        decimal dailyCap = DailyCapUsd;
+        if (dailyCap > 0 && SpentToday >= dailyCap)
         {
             if (!_dailyCapAnnounced)
             {
                 _dailyCapAnnounced = true;
                 Con.Line(ConsoleColor.Yellow,
-                    $"[CAP] daily limit reached: ${SpentToday:0.00} of ${_cfg.LiveDailyUsd:0.00} spent today. "
+                    $"[CAP] daily limit reached: ${SpentToday:0.00} of ${dailyCap:0.00} spent today. "
                   + "No further orders until local midnight. Screening and telemetry continue.");
             }
             Interlocked.Increment(ref Skipped);
@@ -294,7 +328,7 @@ public sealed class LiveExecutor
         decimal gameSpent = _spentByEvent.TryGetValue(eventId, out var gs) ? gs : 0m;
         if (reentry && !_cfg.LiveReentry) why = "side already filled";
         else if (reentry && kellyStakeUsd > 0
-                 && GameBoundStake((decimal)kellyStakeUsd, (decimal)_cfg.LiveStakePerGameUsd, gameSpent,
+                 && GameBoundStake((decimal)kellyStakeUsd, GameCapUsd, gameSpent,
                                    (decimal)_cfg.LiveKellyMinUsd) <= 0) why = "game at cap";
         else if (_lastAttempt.TryGetValue(key, out var last)
                  && (t0 - last).TotalSeconds < _cfg.LiveRetryCooldownSec) why = "cooldown";
@@ -387,7 +421,7 @@ public sealed class LiveExecutor
                   + $"(limit {pxDollars:0.00}, ws {ctx.WsAsk:0.00})  ev {ev * 100:+0.0;-0.0}c  "
                   + $"${(double)fillCount * (double)(avgFill > 0 ? avgFill : (decimal)pxDollars):0.00}  "
                   + $"{ms:0}ms{(fillCount < count ? $"  [PARTIAL: {depth} showing at the limit]" : "")}"
-                  + (reentry ? $"  [RE-ENTRY: game ${gameNow:0.00}/{_cfg.LiveStakePerGameUsd:0.00}]" : ""));
+                  + (reentry ? $"  [RE-ENTRY: game ${gameNow:0.00}/{GameCapUsd:0.00}]" : ""));
             else
                 Con.Line(ConsoleColor.Yellow,
                     $"[MISS] {ticker} {side,-3} 0/{count} @ limit {pxDollars:0.00} (ws said {ctx.WsAsk:0.00}, "
@@ -532,7 +566,7 @@ public sealed class LiveExecutor
       + (_attestExpiry is { } ae ? (ae <= DateTime.UtcNow ? "ATTESTATION LAPSED " : $"attest {Fmt(ae - DateTime.UtcNow)} ") : "")
       + (ContractCapped > 0 ? $"ctr-capped {ContractCapped} " : "")
       + $"staked ${StakedUsd:0.00}"
-      + (_cfg.LiveDailyUsd > 0 ? $"  today ${SpentToday:0.00}/${_cfg.LiveDailyUsd:0.00}" : "")
+      + (DailyCapUsd > 0 ? $"  today ${SpentToday:0.00}/${DailyCapUsd:0.00}" : "")
       + (Attempted > 0 ? $" (fill rate {100.0 * Filled / Attempted:0.0}%)" : "");
 }
 

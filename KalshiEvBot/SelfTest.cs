@@ -1457,6 +1457,74 @@ public static class SelfTest
             finally { try { Directory.Delete(dir, true); } catch { } }
         }
 
+        // ── Balance check + caps that scale with the account (2026-11-23) ────────────────────────────────────
+        // The fixed dollar caps came off so Kelly grows with the account by itself. What replaced them as the FUSE is
+        // the balance check: every bound left is a share of one balance read a day, so a wrong read would scale them
+        // all. A case that only shows up on a bad day, so it is pinned here.
+        Console.WriteLine();
+        Console.WriteLine("-- balance check + caps that scale (restart-proof) --");
+        {
+            var day0 = new DateTime(2026, 11, 23);
+            var day1 = day0.AddDays(1);
+            var first = EquityGuard.Decide(1790, day0, 0.5, null);
+            Check(!first.Held && first.UseUsd == 1790, "no history: the first read is accepted as it stands");
+            var s0 = EquityGuard.Next(first, day0);
+            Check(s0 is { Day: "2026-11-23", BaseUsd: 1790, AcceptedUsd: 1790 }, "...and becomes the base", $"{s0}");
+            var deposit = EquityGuard.Decide(2290, day1, 0.5, s0);
+            Check(!deposit.Held && deposit.UseUsd == 2290, "a $500 monthly deposit (+28%) is taken the next day",
+                  $"use {deposit.UseUsd}");
+            var tenX = EquityGuard.Decide(17900, day1, 0.5, s0);
+            Check(tenX.Held && Math.Abs(tenX.UseUsd - 2685) < 1e-9, "a 10x balance read is HELD at +50% ($2,685), not sized on",
+                  $"use {tenX.UseUsd}");
+            var s1 = EquityGuard.Next(tenX, day1);
+            var restart = EquityGuard.Decide(17900, day1, 0.5, s1);
+            Check(restart.Held && Math.Abs(restart.UseUsd - 2685) < 1e-9,
+                  "a restart the same day compares against the SAME base: still +50%, not 1.5 x 1.5", $"use {restart.UseUsd}");
+            var nextDay = EquityGuard.Decide(17900, day1.AddDays(1), 0.5, EquityGuard.Next(restart, day1));
+            Check(nextDay.Held && Math.Abs(nextDay.UseUsd - 2685 * 1.5) < 1e-6,
+                  "a read still too high climbs one +50% step a day from what was accepted", $"use {nextDay.UseUsd}");
+            var fall = EquityGuard.Decide(1500, day1, 0.5, s0);
+            Check(!fall.Held && fall.UseUsd == 1500, "a fall is taken at once - shrinking with losses is never slowed");
+            Check(!EquityGuard.Decide(17900, day1, 0, s0).Held, "EV_EQUITY_MAX_DAILY_RISE=0 turns the check off");
+
+            string gdir = Path.Combine(Path.GetTempPath(), "evbot-guard-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(gdir);
+            try
+            {
+                string gf = Path.Combine(gdir, "ev_equity_guard.json");
+                Check(EquityGuard.Load(gf) is null, "missing state file = no history (the next read is accepted)");
+                EquityGuard.Save(gf, s1);
+                Check(EquityGuard.Load(gf) == s1, "the base survives a restart exactly", $"{EquityGuard.Load(gf)}");
+                File.WriteAllText(gf, "{ not json");
+                Check(EquityGuard.Load(gf) is null, "a damaged state file loads as no history, without throwing");
+            }
+            finally { try { Directory.Delete(gdir, true); } catch { } }
+
+            // THE CAPS THAT SCALE. A literal $0 game cap meant NO ORDERS (min(kelly, 0 - spent) = 0); 0 now derives one.
+            decimal derived = LiveExecutor.EffectiveGameCapUsd(0, 0.03, 1790);
+            Check(LiveExecutor.EffectiveGameCapUsd(21, 0.03, 1790) == 21m, "a set EV_LIVE_STAKE_GAME is still honoured");
+            Check(Math.Abs(derived - 107.40m) < 0.001m, "EV_LIVE_STAKE_GAME=0 = room for two full bets (2 x 3% x $1,790 = $107.40)",
+                  $"{derived}");
+            Check(Math.Abs(LiveExecutor.EffectiveGameCapUsd(0, 0.03, 3580) - 2 * derived) < 0.001m,
+                  "...and it doubles when the account doubles");
+            Check(LiveExecutor.GameBoundStake(30m, derived, 0m, 5m) == 30m,
+                  "a normal Kelly stake passes the derived game cap untouched");
+            Check(LiveExecutor.GameBoundStake(30m, 0m, 0m, 5m) == 0m,
+                  "(a literal $0 cap still leaves no room - which is exactly why 0 now derives a cap)");
+            Check(Math.Abs(LiveExecutor.EffectiveDailyCapUsd(0, 0.25, 1790) - 447.50m) < 0.001m,
+                  "EV_LIVE_DAILY_FRAC=0.25 at $1,790 stops the day at $447.50", $"{LiveExecutor.EffectiveDailyCapUsd(0, 0.25, 1790)}");
+            Check(LiveExecutor.EffectiveDailyCapUsd(400, 0.25, 1790) == 400m, "both daily caps set: the smaller binds");
+            Check(LiveExecutor.EffectiveDailyCapUsd(400, 0, 1790) == 400m, "a fixed EV_LIVE_DAILY_USD alone still works");
+            Check(LiveExecutor.EffectiveDailyCapUsd(0, 0, 1790) == 0m, "neither set = no daily stop");
+            Check(LiveExecutor.EffectiveDailyCapUsd(0, 0.25, 0) == 0m,
+                  "no equity read yet = no share-based stop (Kelly stakes nothing on zero equity anyway)");
+            Check(Math.Abs(Program.KellyCeilingUsd(1790, 0.03, 0) - 53.70) < 1e-9,
+                  "EV_LIVE_KELLY_MAX_USD=0 is OFF: the ceiling is 3% of equity, not $0", $"{Program.KellyCeilingUsd(1790, 0.03, 0)}");
+            Check(Program.KellyCeilingUsd(1790, 0.03, 21) == 21, "a set dollar ceiling still binds below 3%");
+            Check(EvMath.LiveStakeUsd(0.62, 0.50, 0.035, 1790, 0, 5.0, 0) > 21,
+                  "with the dollar ceiling off a strong signal can stake above the old $21", $"{EvMath.LiveStakeUsd(0.62, 0.50, 0.035, 1790, 0, 5.0, 0):F2}");
+        }
+
         // ── ReportCache: a cached file reads back identical, and a changed file is a miss ────────────
         {
             Console.WriteLine("\n-- report cache --");

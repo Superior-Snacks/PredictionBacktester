@@ -19,6 +19,9 @@ public sealed class EvConfig
     // game means a whole month of this cannot move the balance meaningfully.
     public bool   Live                 = false;
     public double LiveStakePerSideUsd  = Env("EV_LIVE_STAKE_SIDE", 5.0);
+    /// <summary>The per-game dollar cap. 0 = DERIVED (2026-11-23): room for two full bets at the day's equity
+    /// (2 x EV_MAX_TRADE_FRACTION), so it scales with the account - see LiveExecutor.GameCapUsd. Before that, a
+    /// literal $0 here stopped every order (min(kelly, 0 - spent) = 0).</summary>
     public double LiveStakePerGameUsd  = Env("EV_LIVE_STAKE_GAME", 10.0);
     // A no-fill is free and does NOT consume the side's allowance, so the same market may be re-attempted
     // on a later signal. This stops that becoming a hot loop against one stubborn book.
@@ -34,6 +37,11 @@ public sealed class EvConfig
     /// bound one market; nothing bounds the day, and an unattended run turns the shard float over
     /// repeatedly as settlements return. Resets at local midnight and survives a restart.</summary>
     public double LiveDailyUsd = Env("EV_LIVE_DAILY_USD", 0);
+    /// <summary>THE DAY'S STOP AS A SHARE OF EQUITY (2026-11-23). EV_LIVE_DAILY_USD is fixed dollars, so as the
+    /// account grows it binds sooner and freezes the bot's turnover at whatever the account was when it was set.
+    /// This is the same stop against the day's SIZING equity (0.25 = a quarter of it), so it moves with the
+    /// account the way Kelly's stakes do. 0 = off. Both set: the smaller binds.</summary>
+    public double LiveDailyFrac = Env("EV_LIVE_DAILY_FRAC", 0);
     /// <summary>"flat" (the per-side cap) or "kelly" (EvMath.LiveStakeUsd off REAL equity). Default flat, so
     /// nothing about an existing run changes until this is set deliberately.</summary>
     public string LiveSizing = (Environment.GetEnvironmentVariable("EV_LIVE_SIZING") ?? "flat").Trim().ToLowerInvariant();
@@ -125,6 +133,11 @@ public sealed class EvConfig
     // Unset (0) = read the venue. Pin it before --live, or Kelly sizing drifts with the balance and the
     // telemetry stops being comparable across the M0/M1 boundary.
     public double BankrollFallback= Env("EV_BANKROLL_USD", 0);
+    /// <summary>THE BALANCE SANITY CHECK (2026-11-23): the most the SIZING equity may rise in one local day
+    /// (0.5 = +50%). Kelly sizes off one balance read a day; with the fixed dollar caps off, a wrong read would
+    /// scale every bet and every share-of-equity bound with it. Falls are taken at once. 0 = off.
+    /// See <see cref="EquityGuard"/>.</summary>
+    public double EquityMaxDailyRise = Env("EV_EQUITY_MAX_DAILY_RISE", 0.5);
     /// <summary>"proportional" (the spec's primary) or "shin". Both are always computed and logged; this
     /// only selects which one drives the decision.</summary>
     public string DeVigMethod     = (Environment.GetEnvironmentVariable("EV_DEVIG") ?? "proportional").ToLowerInvariant();
@@ -277,6 +290,7 @@ public sealed class EvConfig
         d.LiveStakePerSideUsd = Env("EV_DERIV_LIVE_STAKE_SIDE", LiveStakePerSideUsd);
         d.LiveStakePerGameUsd = Env("EV_DERIV_LIVE_STAKE_GAME", LiveStakePerGameUsd);
         d.LiveDailyUsd        = Env("EV_DERIV_LIVE_DAILY_USD",  LiveDailyUsd);
+        d.LiveDailyFrac       = Env("EV_DERIV_LIVE_DAILY_FRAC", LiveDailyFrac);
 
         // THE ONE FIELD THAT IS NOT A COPY. Derivatives trade only when --live AND EV_LIVE_DERIVATIVES are
         // both on; otherwise this pipeline is observation-only regardless of what the moneyline is doing.
@@ -363,7 +377,13 @@ public sealed class EvEvaluator
 
     /// <summary>Arms live execution. Separate from the constructor so that M0 cannot reach the order API by
     /// forgetting an argument — the executor has to be handed in deliberately.</summary>
-    public void EnableLive(LiveExecutor ex) => _live = ex;
+    public void EnableLive(LiveExecutor ex)
+    {
+        _live = ex;
+        // The executor's derived game cap and daily share read the SAME equity Kelly sizes on, live - so the daily
+        // snapshot (and its balance check) reaches them with no second copy to keep in step.
+        ex.EquitySource ??= () => LiveEquityUsd;
+    }
     public LiveExecutor? LiveExec => _live;
     private readonly EvTelemetry _telemetry;
     private FollowUpTracker? _followUp;
@@ -493,7 +513,8 @@ public sealed class EvEvaluator
 
     /// <summary>The REAL money available on the trading shard: cash plus the bid-value of open positions
     /// there. Snapshotted once a local day. This is what gates the low-collateral floor; it never touches
-    /// the telemetry above.</summary>
+    /// the telemetry above. Since 2026-11-23 it is the figure AFTER the balance check (EquityGuard), and it is
+    /// what Kelly, the derived per-game cap and the daily share all size from.</summary>
     public double LiveEquityUsd { get; set; }
 
     /// <summary>Series -> Kalshi's fee multiplier M. Empty means "not primed", and every lookup then

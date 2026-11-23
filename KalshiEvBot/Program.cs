@@ -71,13 +71,16 @@ internal static class Program
             Console.WriteLine("│  Pinnacle de-vigged = fair value.  Kalshi WS detects, Kalshi REST values.");
             string sizingMode = (Environment.GetEnvironmentVariable("EV_LIVE_SIZING") ?? "flat")
                                 .Trim().ToLowerInvariant();
+            // EV_LIVE_STAKE_GAME=0 is a DERIVED cap since 2026-11-23 (two full bets at the day's equity), not "$0".
+            string gameCapText = stakeGame > 0 ? $"${stakeGame:0.00}/game cap"
+                                               : "per-game cap = two full bets at the day's equity";
             if (sizingMode == "kelly")
-                Console.WriteLine($"│  IOC buys on every confirmed signal. KELLY sizing off live equity, "
-                                + $"${stakeGame:0.00}/game cap,");
+                Console.WriteLine($"│  IOC buys on every confirmed signal. KELLY sizing off live equity, {gameCapText},");
             else
-                Console.WriteLine($"│  IOC buys on every confirmed signal. ${stakeSide:0.00}/side, ${stakeGame:0.00}/game,");
+                Console.WriteLine($"│  IOC buys on every confirmed signal. ${stakeSide:0.00}/side, {gameCapText},");
             Console.WriteLine(EvConfig.Env("EV_LIVE_REENTRY", 0) != 0
-                ? $"│  RE-ENTRY ON: a filled side is bought again on later signals until the game holds ${stakeGame:0.00}."
+                ? $"│  RE-ENTRY ON: a filled side is bought again on later signals until the game holds "
+                  + (stakeGame > 0 ? $"${stakeGame:0.00}." : "two full bets.")
                 : "│  one FILLED entry per side. A no-fill costs nothing and may be retried.");
             if (micro)
                 Console.WriteLine("│  MICRO-BET: sized to measure the FILL RATE, not to earn — at this size");
@@ -102,13 +105,20 @@ internal static class Program
                                 + "(EV_LIVE_DERIVATIVES=0). Their edge is unmeasured; --resolve "
                                 + "section 4 splits by MarketType once some have settled.");
 
-            double dailyCap = EvConfig.Env("EV_LIVE_DAILY_USD", 0);
-            if (dailyCap > 0)
-                Console.WriteLine($"[CAP] daily limit ${dailyCap:0.00} — resets at local midnight, survives a restart.");
+            double dailyCap  = EvConfig.Env("EV_LIVE_DAILY_USD", 0);
+            double dailyFrac = EvConfig.Env("EV_LIVE_DAILY_FRAC", 0);
+            if (dailyCap > 0 || dailyFrac > 0)
+            {
+                string what = dailyCap > 0 && dailyFrac > 0
+                            ? $"{dailyFrac * 100:0.#}% of the day's equity or ${dailyCap:0.00}, whichever is smaller"
+                            : dailyFrac > 0 ? $"{dailyFrac * 100:0.#}% of the day's equity (moves with the account)"
+                            : $"${dailyCap:0.00}";
+                Console.WriteLine($"[CAP] daily limit {what} — resets at local midnight, survives a restart.");
+            }
             else
                 Con.Line(ConsoleColor.Yellow,
                     "[CAP] NO daily spend limit set. Per-side and per-game caps bound one market; nothing "
-                  + "bounds the day. Set EV_LIVE_DAILY_USD before leaving this unattended.");
+                  + "bounds the day. Set EV_LIVE_DAILY_FRAC (or EV_LIVE_DAILY_USD) before leaving this unattended.");
         }
         else
         {
@@ -516,6 +526,7 @@ internal static class Program
         // byte-identical to before.
         var discord = new DiscordNotifier(Environment.GetEnvironmentVariable("DISCORD_WEBHOOK_URL"),
                                           botName: "KalshiEvBot");
+        _alert = m => _ = discord.AlertAsync(m);               // the balance check's one line when it holds equity back
         var started = DateTime.UtcNow;
 
         async Task<string> BuildStatusAsync()
@@ -703,15 +714,17 @@ internal static class Program
         // arithmetic and can be done before the first order rather than inferred from a silent afternoon.
         if (live && cfg.LiveSizing == "kelly")
         {
-            double ceiling = Math.Min(eval.LiveEquityUsd * cfg.MaxTradeFrac, cfg.LiveKellyMaxUsd);
+            double ceiling = KellyCeilingUsd(eval.LiveEquityUsd, cfg.MaxTradeFrac, cfg.LiveKellyMaxUsd);
             // 0.0068 is the MEASURED median of f*alpha*beta over 1547 logged signals; it is a description
             // of this bot's own history, not a guess, and it is what makes "most signals" quantifiable.
             double typical = eval.LiveEquityUsd * 0.0068;
             string frac = cfg.LiveKellyFraction > 0
                         ? $"flat {cfg.LiveKellyFraction:0.###} Kelly" : "Alpha (vig-based, ~0.157)";
             Console.WriteLine($"[KELLY ] sizing on REAL equity ${eval.LiveEquityUsd:0.00} — {frac}, "
-                            + $"floor ${cfg.LiveKellyMinUsd:0.00}, ceiling ${cfg.LiveKellyMaxUsd:0.00}, "
-                            + $"beta knee {cfg.KellyBetaKnee:0.##}/zero {cfg.KellyBetaZero:0.##}");
+                            + $"floor ${cfg.LiveKellyMinUsd:0.00}, ceiling "
+                            + (cfg.LiveKellyMaxUsd > 0 ? $"${cfg.LiveKellyMaxUsd:0.00}"
+                                                       : $"OFF ({cfg.MaxTradeFrac * 100:0.#}% of equity per bet only)")
+                            + $", beta knee {cfg.KellyBetaKnee:0.##}/zero {cfg.KellyBetaZero:0.##}");
             Console.WriteLine($"[KELLY ] haircut: edge fed to Kelly capped at "
                             + (cfg.LiveKellyMaxEdge > 0 ? $"{cfg.LiveKellyMaxEdge * 100:0.0}c" : "OFF")
                             + $", contracts per order capped at "
@@ -719,6 +732,14 @@ internal static class Program
                             + " (EV_LIVE_KELLY_MAX_EDGE / EV_LIVE_MAX_CONTRACTS).");
             Console.WriteLine($"[KELLY ] at this equity Kelly can ask at most ${ceiling:0.00} and typically "
                             + $"asks about ${typical:0.00}.");
+            if (eval.LiveExec is { } lxCaps)
+                Console.WriteLine($"[KELLY ] game cap ${lxCaps.GameCapUsd:0.00}"
+                                + (cfg.LiveStakePerGameUsd > 0 ? " (EV_LIVE_STAKE_GAME)" : " (two full bets at today's equity)")
+                                + (lxCaps.DailyCapUsd > 0
+                                   ? $", the day stops at ${lxCaps.DailyCapUsd:0.00}"
+                                     + (cfg.LiveDailyFrac > 0 ? $" ({cfg.LiveDailyFrac * 100:0.#}% of equity)" : "")
+                                   : ", NO daily stop")
+                                + ". Shares of equity move with the daily snapshot; nothing here needs raising by hand.");
             Console.WriteLine("[KELLY ] basis: "
                             + (cfg.LiveKellyWalkK > 0 ? $"walk-aware K={cfg.LiveKellyWalkK:0.00}" : "at the ask (walk OFF)")
                             + ", "
@@ -1713,6 +1734,16 @@ internal static class Program
     /// <summary>The local date the standing snapshot was taken for. One decision per day, then held.</summary>
     private static DateTime _bankrollDay = DateTime.MinValue;
 
+    /// <summary>Discord, for the balance check's one line when it holds the sizing equity back. Set once Discord is
+    /// built; a run without it prints the same line to the console only.</summary>
+    private static Action<string>? _alert;
+
+    /// <summary>The most one Kelly bet can be: EV_MAX_TRADE_FRACTION of equity, under EV_LIVE_KELLY_MAX_USD when that
+    /// is set. 0 there is OFF (EvMath.LiveStakeUsd's own rule) - read as a $0 ceiling, the startup preflight shouted
+    /// that "no order can ever clear" a floor every order clears.</summary>
+    internal static double KellyCeilingUsd(double equityUsd, double maxTradeFrac, double maxUsd)
+        => maxUsd > 0 ? Math.Min(equityUsd * maxTradeFrac, maxUsd) : equityUsd * maxTradeFrac;
+
     /// <summary>The exchange shard our markets live on, resolved once from a real ticker. Collateral and
     /// balances are per shard, so every money figure has to be scoped to this one.</summary>
     private static int _tradingShard;
@@ -1790,24 +1821,69 @@ internal static class Program
         try
         {
             double cash = await ReadShardCashAsync(k, _tradingShard);
-            eval.LiveEquityUsd = cash;
+            // THE BALANCE SANITY CHECK (EquityGuard, 2026-11-23). With the fixed dollar caps off, this one read sizes
+            // every bet and every share-of-equity bound, so it may rise at most EV_EQUITY_MAX_DAILY_RISE a local day
+            // over what an earlier day accepted; a fall is taken at once. The state file is what stops a restart from
+            // re-opening the allowance. Failing to save it is said and survived - sizing goes on.
+            var today = DateTime.Now.Date;
+            var guard = EquityGuard.Decide(cash, today, cfg.EquityMaxDailyRise, EquityGuard.Load(EquityGuard.DefaultPath));
+            try { EquityGuard.Save(EquityGuard.DefaultPath, EquityGuard.Next(guard, today)); }
+            catch (Exception gx)
+            {
+                Con.Line(ConsoleColor.Yellow,
+                    $"[EQUITY  ] balance-check state not saved ({gx.GetType().Name}: {gx.Message}) - today's figure "
+                  + "stands, but a restart would compare against the previous file.");
+            }
+            eval.LiveEquityUsd = guard.UseUsd;
             // Only when nothing pinned it: unpinned, the telemetry basis follows the real account.
             if (cfg.BankrollFallback <= 0) eval.BankrollUsd = eval.LiveEquityUsd;
             Mirror(equity: true);
-            _bankrollDay = DateTime.Now.Date;
+            _bankrollDay = today;
+            string risePct = $"+{cfg.EquityMaxDailyRise * 100:0.#}%";
             if (announce || firstOfDay)
-                Console.WriteLine($"[EQUITY  ] ${eval.LiveEquityUsd:0.00} spendable cash on shard "
+            {
+                Console.WriteLine($"[EQUITY  ] ${cash:0.00} spendable cash on shard "
                                 + $"{_tradingShard}. ONE snapshot for {_bankrollDay:ddd dd MMM} - held fixed "
                                 + "all day, so nothing downstream moves as fills and settlements land.");
+                if (cfg.EquityMaxDailyRise <= 0)
+                    Con.Line(ConsoleColor.Yellow,
+                        "[EQUITY  ] balance check OFF (EV_EQUITY_MAX_DAILY_RISE=0) - a wrong balance read would size "
+                      + "every bet off it.");
+                else if (guard.BaseUsd <= 0)
+                    Console.WriteLine($"[EQUITY  ] balance check armed: no earlier figure, so today's read is the base. "
+                                    + $"Sizing may rise at most {risePct} a day from here ({EquityGuard.DefaultPath}).");
+                else if (!guard.Held)
+                    Console.WriteLine($"[EQUITY  ] balance check: base ${guard.BaseUsd:0.00}, today may size up to "
+                                    + $"${guard.CeilingUsd:0.00} ({risePct}) - the read is inside it.");
+            }
+            if (guard.Held)
+            {
+                Con.Line(ConsoleColor.Yellow,
+                    $"[EQUITY  ] HELD: shard {_tradingShard} reads ${cash:0.00}, but sizing may rise at most {risePct} a "
+                  + $"day from ${guard.BaseUsd:0.00} - sizing on ${guard.UseUsd:0.00} today. A large deposit ramps in over "
+                  + $"a few days; a wrong read stops here. To take the read now: delete "
+                  + $"{Path.GetFileName(EquityGuard.DefaultPath)} and restart.");
+                try
+                {
+                    _alert?.Invoke($"⚠️ **Balance check held the sizing equity** — shard reads ${cash:0.00}, sizing on "
+                                 + $"${guard.UseUsd:0.00} today (at most {risePct}/day from ${guard.BaseUsd:0.00}). A real "
+                                 + "deposit ramps in by itself; to take it now, delete ev_equity_guard.json and restart.");
+                }
+                catch { }
+            }
             // OPEN POSITIONS ARE CAPITAL, NOT LOSSES: counting cash alone would shrink the bankroll every
             // time a bet is live and grow it back on settlement, which is sizing noise with no information
             // in it. The floor below is the only thing the bankroll gates in flat-stake mode - sizing there
             // is the per-side cap, not Kelly.
-            if (cfg.Live && eval.LiveEquityUsd < cfg.LiveStakePerGameUsd)
+            // With a derived game cap (EV_LIVE_STAKE_GAME=0) "one game's cap" is a share of this very number, so the
+            // honest minimum is the Kelly floor: below it not even the smallest bet can be placed.
+            double lowBar = cfg.LiveStakePerGameUsd > 0 ? cfg.LiveStakePerGameUsd : cfg.LiveKellyMinUsd;
+            if (cfg.Live && eval.LiveEquityUsd < lowBar)
                 Con.Line(ConsoleColor.Yellow,
-                    $"[EQUITY  ] LOW: ${eval.LiveEquityUsd:0.00} on shard {_tradingShard} is under one game's "
-                  + $"cap (${cfg.LiveStakePerGameUsd:0.00}). Orders will start failing for want of "
-                  + "collateral; move funds with /portfolio/intra_exchange_instance_transfer.");
+                    $"[EQUITY  ] LOW: ${eval.LiveEquityUsd:0.00} on shard {_tradingShard} is under "
+                  + (cfg.LiveStakePerGameUsd > 0 ? "one game's cap" : "the Kelly floor") + $" (${lowBar:0.00}). "
+                  + "Orders will start failing for want of collateral; move funds with "
+                  + "/portfolio/intra_exchange_instance_transfer.");
         }
         catch (Exception ex)
         {

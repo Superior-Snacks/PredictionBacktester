@@ -18,3 +18,85 @@
 {"at": "2026-11-19T13:05:17Z", "run": {"misses": 0}}
 {"at": "2026-11-19T15:18:46Z", "run": {"misses": 0}}
 {"at": "2026-11-19T16:50:57Z", "run": {"misses": 0}}
+{"at": "2026-11-19T18:12:13Z", "run": {"misses": 0}}
+{"at": "2026-11-19T19:43:24Z", "run": {"misses": 3}}
+{"event_id": "KXITFWMATCH-26NOV19DEFHON", "tickers": ["KXITFWMATCH-26NOV19DEFHON-DEF", "KXITFWMATCH-26NOV19DEFHON-HON"], "kalshi": "DeFalco vs Honer", "players": ["defalco", "honer"], "board": {"token": "210319:1640696165:home", "league": "ITF Women Funchal - R16", "start": "2026-11-20T00:00:00Z", "names": ["amelia honer", "jenna defalco"]}, "why": "paired by this run's matcher, then cleared later in it (price gate / name audit / mirror check)", "at": "2026-11-19T19:43:24Z"}
+{"event_id": "KXWTACHALLENGERMATCH-26NOV19ZOLBUR", "tickers": ["KXWTACHALLENGERMATCH-26NOV19ZOLBUR-BUR", "KXWTACHALLENGERMATCH-26NOV19ZOLBUR-ZOL"], "kalshi": "Zolotareva vs Burillo Escorihuela", "players": ["burillo escorihuela", "zolotareva"], "board": {"token": "223071:1640637155:home", "league": "WTA 125k Colina - R16", "start": "2026-11-19T09:00:00Z", "names": ["anastasia zolotareva", "irene burillo escorihuela"]}, "why": "paired by this run's matcher, then cleared later in it (price gate / name audit / mirror check)", "at": "2026-11-19T19:43:24Z"}
+{"event_id": "KXITFMATCH-26NOV19TABALV", "tickers": ["KXITFMATCH-26NOV19TABALV-ALV", "KXITFMATCH-26NOV19TABALV-TAB"], "kalshi": "Tabata vs Alves", "players": ["alves", "tabata"], "board": {"token": "223149:1640701012:home", "league": "ITF Men Lajeado - R16", "start": "2026-11-19T15:00:00Z", "names": ["mateus alves", "ryo tabata"]}, "why": "paired by this run's matcher, then cleared later in it (price gate / name audit / mirror check)", "at": "2026-11-19T19:43:24Z"}
+{"at": "2026-11-19T21:14:26Z", "run": {"misses": 0}}
+{"at": "2026-11-19T22:45:22Z", "run": {"misses": 0}}
+{"at": "2026-11-20T00:16:22Z", "run": {"misses": 0}}
+{"at": "2026-11-20T01:47:23Z", "run": {"misses": 0}}
+{"at": "2026-11-20T03:18:27Z", "run": {"misses": 0}}
+{"at": "2026-11-20T04:49:25Z", "run": {"misses": 0}}
+{"at": "2026-11-20T06:20:27Z", "run": {"misses": 0}}
+{"at": "2026-11-20T07:51:31Z", "run": {"misses": 0}}
+{"at": "2026-11-20T09:22:26Z", "run": {"misses": 0}}
+{"at": "2026-11-20T10:53:28Z", "run": {"misses": 0}}
+{"at": "2026-11-20T12:24:20Z", "run": {"misses": 0}}
+{"at": "2026-11-20T13:55:40Z", "run": {"misses": 0}}
+{"at": "2026-11-20T15:26:44Z", "run": {"misses": 0}}
+{"at": "2026-11-20T16:58:08Z", "run": {"misses": 0}}
+{"at": "2026-11-20T18:29:18Z", "run": {"misses": 0}}
+{"at": "2026-11-20T20:00:25Z", "run": {"misses": 0}}
+{"at": "2026-11-20T21:32:22Z", "run": {"misses": 0}}
+{"at": "2026-11-20T23:03:25Z", "run": {"misses": 0}}
+{"at": "2026-11-21T00:34:28Z", "run": {"misses": 0}}
+{"at": "2026-11-21T02:05:27Z", "run": {"misses": 0}}
+{"at": "2026-11-21T03:36:26Z", "run": {"misses": 0}}
+{"at": "2026-11-21T05:07:24Z", "run": {"misses": 0}}
+{"at": "2026-11-21T06:38:23Z", "run": {"misses": 0}}
+{"at": "2026-11-21T08:09:20Z", "run": {"misses": 0}}
+{"at": "2026-11-21T09:40:19Z", "run": {"misses": 0}}
+{"at": "2026-11-21T11:11:19Z", "run": {"misses": 0}}
+{"at": "2026-11-21T12:42:15Z", "run": {"misses": 0}}
+{"at": "2026-11-21T14:13:22Z", "run": {"misses": 0}}
+{"at": "2026-11-21T15:44:29Z", "run": {"misses": 0}}
+{"at": "2026-11-21T17:15:36Z", "run": {"misses": 2}}
+{"event_id": "KXITFMATCH-26NOV21CORCOL", "tickers": ["KXITFMATCH-26NOV21CORCOL-COL", "KXITFMATCH-26NOV21CORCOL-COR"], "kalshi": "Corwin vs Colombo", "players": ["colombo", "corwin"], "board": {"token": "264515:1640858016:home", "league": "ITF Men Orlando - R16", "start": "2026-11-21T16:00:00Z", "names": ["felix corwin", "kayden colombo"]}, "why": "paired by this run's matcher, then cleared later in it (price gate / name audit / mirror check)", "at": "2026-11-21T17:15:36Z"}
+{"event_id": "KXITFMATCH-26NOV21JANDAV", "tickers": ["KXITFMATCH-26NOV21JANDAV-DAV", "KXITFMATCH-26NOV21JANDAV-JAN"], "kalshi": "Jansen vs Davidov", "players": ["davidov", "jansen"], "board": {"token": "301484:1640836472:home", "league": "ITF Men Bradenton - SF", "start": "2026-11-21T15:58:31Z", "names": ["teodor davidov", "william jansen"]}, "why": "paired by this run's matcher, then cleared later in it (price gate / name audit / mirror check)", "at": "2026-11-21T17:15:36Z"}
+{"at": "2026-11-21T18:46:45Z", "run": {"misses": 0}}
+{"at": "2026-11-21T20:17:51Z", "run": {"misses": 0}}
+{"at": "2026-11-21T21:49:04Z", "run": {"misses": 0}}
+{"at": "2026-11-21T23:20:10Z", "run": {"misses": 0}}
+{"at": "2026-11-22T00:51:00Z", "run": {"misses": 0}}
+{"at": "2026-11-22T02:22:05Z", "run": {"misses": 0}}
+{"at": "2026-11-22T03:53:01Z", "run": {"misses": 0}}
+{"at": "2026-11-22T05:24:08Z", "run": {"misses": 0}}
+{"at": "2026-11-22T06:56:13Z", "run": {"misses": 0}}
+{"at": "2026-11-22T08:27:18Z", "run": {"misses": 0}}
+{"at": "2026-11-22T09:58:23Z", "run": {"misses": 2}}
+{"event_id": "KXATPCHALLENGERMATCH-26NOV22CAMDLF", "tickers": ["KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM", "KXATPCHALLENGERMATCH-26NOV22CAMDLF-DLF"], "kalshi": "Camargo Lima vs De la Fuente", "players": ["camargo lima", "de la fuente"], "board": {"token": "225280:1640940972:home", "league": "ATP Challenger Florianopolis - Qualifiers", "start": "2026-11-22T15:00:00Z", "names": ["enzo lima", "santiago de la fuente"]}, "why": "KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM  ['camargo lima', 'de la fuente'] (best leg 61 \u2014 not on Pinnacle's board)", "at": "2026-11-22T09:58:23Z"}
+{"event_id": "KXATPCHALLENGERMATCH-26NOV22OZDAGA", "tickers": ["KXATPCHALLENGERMATCH-26NOV22OZDAGA-AGA", "KXATPCHALLENGERMATCH-26NOV22OZDAGA-OZD"], "kalshi": "Ozdemir vs Agafonov", "players": ["agafonov", "ozdemir"], "board": {"token": "302438:1640923505:home", "league": "ATP Challenger Ankara - Qualifiers", "start": "2026-11-22T08:13:42Z", "names": ["egor agafonov", "s mert ozdemir"]}, "why": "paired by this run's matcher, then cleared later in it (price gate / name audit / mirror check)", "at": "2026-11-22T09:58:23Z"}
+{"at": "2026-11-22T11:29:16Z", "run": {"misses": 2}}
+{"event_id": "KXATPCHALLENGERMATCH-26NOV22CAMDLF", "tickers": ["KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM", "KXATPCHALLENGERMATCH-26NOV22CAMDLF-DLF"], "kalshi": "Camargo Lima vs De la Fuente", "players": ["camargo lima", "de la fuente"], "board": {"token": "225280:1640940972:home", "league": "ATP Challenger Florianopolis - Qualifiers", "start": "2026-11-22T15:00:00Z", "names": ["enzo lima", "santiago de la fuente"]}, "why": "KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM  ['camargo lima', 'de la fuente'] (best leg 61 \u2014 not on Pinnacle's board)", "at": "2026-11-22T11:29:16Z"}
+{"event_id": "KXITFWMATCH-26NOV22YANSTO", "tickers": ["KXITFWMATCH-26NOV22YANSTO-STO", "KXITFWMATCH-26NOV22YANSTO-YAN"], "kalshi": "Yaneva vs Stojsavljevic", "players": ["stojsavljevic", "yaneva"], "board": {"token": "8475:1640898561:home", "league": "ITF Women Trnava - Final", "start": "2026-11-22T10:14:29Z", "names": ["elizara yaneva", "mika stojsavljevic"]}, "why": "paired by this run's matcher, then cleared later in it (price gate / name audit / mirror check)", "at": "2026-11-22T11:29:16Z"}
+{"at": "2026-11-22T13:00:20Z", "run": {"misses": 1}}
+{"event_id": "KXATPCHALLENGERMATCH-26NOV22CAMDLF", "tickers": ["KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM", "KXATPCHALLENGERMATCH-26NOV22CAMDLF-DLF"], "kalshi": "Camargo Lima vs De la Fuente", "players": ["camargo lima", "de la fuente"], "board": {"token": "225280:1640940972:home", "league": "ATP Challenger Florianopolis - Qualifiers", "start": "2026-11-22T15:00:00Z", "names": ["enzo lima", "santiago de la fuente"]}, "why": "KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM  ['camargo lima', 'de la fuente'] (best leg 61 \u2014 not on Pinnacle's board)", "at": "2026-11-22T13:00:20Z"}
+{"at": "2026-11-22T14:31:30Z", "run": {"misses": 1}}
+{"event_id": "KXATPCHALLENGERMATCH-26NOV22CAMDLF", "tickers": ["KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM", "KXATPCHALLENGERMATCH-26NOV22CAMDLF-DLF"], "kalshi": "Camargo Lima vs De la Fuente", "players": ["camargo lima", "de la fuente"], "board": {"token": "225280:1640940972:home", "league": "ATP Challenger Florianopolis - Qualifiers", "start": "2026-11-22T15:00:00Z", "names": ["enzo lima", "santiago de la fuente"]}, "why": "KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM  ['camargo lima', 'de la fuente'] (best leg 61 \u2014 not on Pinnacle's board)", "at": "2026-11-22T14:31:30Z"}
+{"at": "2026-11-22T16:02:31Z", "run": {"misses": 1}}
+{"event_id": "KXATPCHALLENGERMATCH-26NOV22CAMDLF", "tickers": ["KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM", "KXATPCHALLENGERMATCH-26NOV22CAMDLF-DLF"], "kalshi": "Camargo Lima vs De la Fuente", "players": ["camargo lima", "de la fuente"], "board": {"token": "225280:1640940972:home", "league": "ATP Challenger Florianopolis - Qualifiers", "start": "2026-11-22T18:00:00Z", "names": ["enzo lima", "santiago de la fuente"]}, "why": "KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM  ['camargo lima', 'de la fuente'] (best leg 61 \u2014 not on Pinnacle's board)", "at": "2026-11-22T16:02:31Z"}
+{"at": "2026-11-22T17:33:31Z", "run": {"misses": 1}}
+{"event_id": "KXATPCHALLENGERMATCH-26NOV22CAMDLF", "tickers": ["KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM", "KXATPCHALLENGERMATCH-26NOV22CAMDLF-DLF"], "kalshi": "Camargo Lima vs De la Fuente", "players": ["camargo lima", "de la fuente"], "board": {"token": "225280:1640940972:home", "league": "ATP Challenger Florianopolis - Qualifiers", "start": "2026-11-22T18:00:00Z", "names": ["enzo lima", "santiago de la fuente"]}, "why": "KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM  ['camargo lima', 'de la fuente'] (best leg 61 \u2014 not on Pinnacle's board)", "at": "2026-11-22T17:33:31Z"}
+{"at": "2026-11-22T19:04:36Z", "run": {"misses": 2}}
+{"event_id": "KXATPCHALLENGERMATCH-26NOV22CAMDLF", "tickers": ["KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM", "KXATPCHALLENGERMATCH-26NOV22CAMDLF-DLF"], "kalshi": "Camargo Lima vs De la Fuente", "players": ["camargo lima", "de la fuente"], "board": {"token": "225280:1640940972:home", "league": "ATP Challenger Florianopolis - Qualifiers", "start": "2026-11-23T13:00:00Z", "names": ["enzo lima", "santiago de la fuente"]}, "why": "KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM  ['camargo lima', 'de la fuente'] (best leg 61 \u2014 not on Pinnacle's board)", "at": "2026-11-22T19:04:36Z"}
+{"event_id": "KXITFWMATCH-26NOV22SHCSIE", "tickers": ["KXITFWMATCH-26NOV22SHCSIE-SHC", "KXITFWMATCH-26NOV22SHCSIE-SIE"], "kalshi": "Shcherbinina vs Sieg", "players": ["shcherbinina", "sieg"], "board": {"token": "198339:1640928538:home", "league": "ITF Women Orlando - Final", "start": "2026-11-22T17:12:56Z", "names": ["alina shcherbinina", "madison sieg"]}, "why": "paired by this run's matcher, then cleared later in it (price gate / name audit / mirror check)", "at": "2026-11-22T19:04:36Z"}
+{"at": "2026-11-22T20:36:17Z", "run": {"misses": 1}}
+{"event_id": "KXATPCHALLENGERMATCH-26NOV22CAMDLF", "tickers": ["KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM", "KXATPCHALLENGERMATCH-26NOV22CAMDLF-DLF"], "kalshi": "Camargo Lima vs De la Fuente", "players": ["camargo lima", "de la fuente"], "board": {"token": "225280:1640940972:home", "league": "ATP Challenger Florianopolis - Qualifiers", "start": "2026-11-23T13:00:00Z", "names": ["enzo lima", "santiago de la fuente"]}, "why": "KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM  ['camargo lima', 'de la fuente'] (best leg 61 \u2014 not on Pinnacle's board)", "at": "2026-11-22T20:36:17Z"}
+{"at": "2026-11-22T22:07:15Z", "run": {"misses": 1}}
+{"event_id": "KXATPCHALLENGERMATCH-26NOV22CAMDLF", "tickers": ["KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM", "KXATPCHALLENGERMATCH-26NOV22CAMDLF-DLF"], "kalshi": "Camargo Lima vs De la Fuente", "players": ["camargo lima", "de la fuente"], "board": {"token": "225280:1640940972:home", "league": "ATP Challenger Florianopolis - Qualifiers", "start": "2026-11-23T16:00:00Z", "names": ["enzo lima", "santiago de la fuente"]}, "why": "KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM  ['camargo lima', 'de la fuente'] (best leg 61 \u2014 not on Pinnacle's board)", "at": "2026-11-22T22:07:15Z"}
+{"at": "2026-11-22T23:38:10Z", "run": {"misses": 1}}
+{"event_id": "KXATPCHALLENGERMATCH-26NOV22CAMDLF", "tickers": ["KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM", "KXATPCHALLENGERMATCH-26NOV22CAMDLF-DLF"], "kalshi": "Camargo Lima vs De la Fuente", "players": ["camargo lima", "de la fuente"], "board": {"token": "225280:1640940972:home", "league": "ATP Challenger Florianopolis - Qualifiers", "start": "2026-11-23T16:00:00Z", "names": ["enzo lima", "santiago de la fuente"]}, "why": "KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM  ['camargo lima', 'de la fuente'] (best leg 61 \u2014 not on Pinnacle's board)", "at": "2026-11-22T23:38:10Z"}
+{"at": "2026-11-23T01:09:04Z", "run": {"misses": 1}}
+{"event_id": "KXATPCHALLENGERMATCH-26NOV22CAMDLF", "tickers": ["KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM", "KXATPCHALLENGERMATCH-26NOV22CAMDLF-DLF"], "kalshi": "Camargo Lima vs De la Fuente", "players": ["camargo lima", "de la fuente"], "board": {"token": "225280:1640940972:home", "league": "ATP Challenger Florianopolis - Qualifiers", "start": "2026-11-23T16:00:00Z", "names": ["enzo lima", "santiago de la fuente"]}, "why": "KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM  ['camargo lima', 'de la fuente'] (best leg 61 \u2014 not on Pinnacle's board)", "at": "2026-11-23T01:09:04Z"}
+{"at": "2026-11-23T02:39:59Z", "run": {"misses": 1}}
+{"event_id": "KXATPCHALLENGERMATCH-26NOV22CAMDLF", "tickers": ["KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM", "KXATPCHALLENGERMATCH-26NOV22CAMDLF-DLF"], "kalshi": "Camargo Lima vs De la Fuente", "players": ["camargo lima", "de la fuente"], "board": {"token": "225280:1640940972:home", "league": "ATP Challenger Florianopolis - Qualifiers", "start": "2026-11-23T16:00:00Z", "names": ["enzo lima", "santiago de la fuente"]}, "why": "KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM  ['camargo lima', 'de la fuente'] (best leg 61 \u2014 not on Pinnacle's board)", "at": "2026-11-23T02:39:59Z"}
+{"at": "2026-11-23T04:10:48Z", "run": {"misses": 1}}
+{"event_id": "KXATPCHALLENGERMATCH-26NOV22CAMDLF", "tickers": ["KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM", "KXATPCHALLENGERMATCH-26NOV22CAMDLF-DLF"], "kalshi": "Camargo Lima vs De la Fuente", "players": ["camargo lima", "de la fuente"], "board": {"token": "225280:1640940972:home", "league": "ATP Challenger Florianopolis - Qualifiers", "start": "2026-11-23T16:00:00Z", "names": ["enzo lima", "santiago de la fuente"]}, "why": "KXATPCHALLENGERMATCH-26NOV22CAMDLF-CAM  ['camargo lima', 'de la fuente'] (best leg 61 \u2014 not on Pinnacle's board)", "at": "2026-11-23T04:10:48Z"}
+{"at": "2026-11-23T05:41:38Z", "run": {"misses": 0}}
+{"at": "2026-11-23T07:12:28Z", "run": {"misses": 0}}
+{"at": "2026-11-23T08:43:19Z", "run": {"misses": 0}}
+{"at": "2026-11-23T10:14:12Z", "run": {"misses": 0}}
+{"at": "2026-11-23T11:45:05Z", "run": {"misses": 0}}
+{"at": "2026-11-23T13:16:05Z", "run": {"misses": 0}}
