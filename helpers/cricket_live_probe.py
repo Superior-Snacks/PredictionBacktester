@@ -5,6 +5,12 @@ explanations fit: (a) Pinnacle does not price these matches in play at all, or (
 past its betting-close time (cutoffAt), which pinnacle_adapter drops by design - it was built for tennis, whose in-play
 prices live on a separate child listing. A third would be (c) a separate in-play listing the sidecar failed to link.
 
+LESSON 2026-11-24: AN OPEN MONEYLINE AFTER THE START IS NOT IN-PLAY EVIDENCE. China v Indonesia's pre-match listing
+stayed open 2h past its start - status pending, never flagged live, Pinnacle's cricket live board empty - at exactly
+its pre-match price in every read. The first version of verdict() called that "priced in play on the same listing" and
+recommended a cutoffAt pass-through, which would have fed the shadow a frozen price. The verdict now needs Pinnacle's
+own live flags (isLive / liveMode / the live board) or a price that moves; see live_flags().
+
 This watches named matches around their start with a few Pinnacle guest-API reads - 4 requests per read at ~1/s, reads
 at start -10, +10, +30, +60 and +120 min - and says which it is. For a paired match it also records what the local
 sidecar holds (/debug/redirect, asks Pinnacle nothing) and, at the end, how many in-play rows the bot logged.
@@ -141,7 +147,13 @@ def read_all(g: Guest, matches: list[dict]) -> dict:
             if not isinstance(v, list)}
     board = (ms if isinstance(ms, list) else []) + (lms if isinstance(lms, list) else [])
     out = {"at": at.isoformat(), "errors": errs, "board_size": len(ms) if isinstance(ms, list) else None,
-           "live_board_size": len(lms) if isinstance(lms, list) else None, "matches": {}}
+           "live_board_size": len(lms) if isinstance(lms, list) else None,
+           # who IS in play - so a live listing the linking below misses (other id, no parentId, other names) still
+           # shows up in the verdict instead of reading as "not priced in play"
+           "live_board": [{"id": x.get("id"), "parentId": x.get("parentId"), "names": sorted(names_of(x)),
+                           "units": x.get("units"), "liveMode": x.get("liveMode"), "start": x.get("startTime")}
+                          for x in (lms if isinstance(lms, list) else [])],
+           "matches": {}}
     for m in matches:
         target = next((x for x in board if x.get("id") == m["mid"]), None)
         if target is not None:
@@ -223,39 +235,141 @@ def bot_inplay_rows(kalshi: str, day: datetime) -> int | None:
     return n
 
 
+def live_flags(x: dict) -> list[str]:
+    """Pinnacle's own signs that a listing is IN PLAY - with a price that moves, the only evidence verdict() takes.
+    An open moneyline after the start is NOT one (see the module's LESSON 2026-11-24). The matchup's `status` is not
+    used either: the sidecar never reads it, and China v Indonesia sat at "pending" 2h after its start."""
+    return [f for f, on in (("isLive", x.get("isLive")), (f"liveMode {x.get('liveMode')}", x.get("liveMode")),
+                            ("on the live board", x.get("on_live_board"))) if on]
+
+
+def fmt_px(p) -> str:
+    return " / ".join(f"{d} {v:+}" if isinstance(v, (int, float)) else f"{d} {v}" for d, v in p)
+
+
+def sidecar_note(m: dict, post: list[dict]) -> str:
+    """For a paired match: did the running sidecar follow the token to the in-play listing (/debug/redirect)?"""
+    if not m.get("token"):
+        return "Not paired, so the sidecar is not following it."
+    reds = [((s["matches"].get(str(m["mid"])) or {}).get("sidecar") or {}) for s in post]
+    got = [r.get("redirect") for r in reds if isinstance(r, dict) and r.get("redirect")]
+    if got:
+        return f"The sidecar followed it (redirect -> {got[-1]})."
+    return "The sidecar did NOT follow it (no redirect in any read) - a linking fix."
+
+
 def verdict(m: dict, snaps: list[dict]) -> str:
+    """What Pinnacle did with this match after its start. Order matters: a separate live listing first (tennis and
+    esports work that way, and a stale parent can sit next to it), then the same listing WITH live evidence, then
+    the cases where nothing went live."""
     start = iso(m.get("moved_to") or m["start"])
     pre = [s for s in snaps if iso(s["at"]) < start]
     post = [s for s in snaps if iso(s["at"]) >= start + timedelta(minutes=5)]
-
-    def target_open(s):
-        rel = (s["matches"].get(str(m["mid"])) or {}).get("listings") or []
-        return [k for x in rel if x["role"] == "target" for k in x["ml"] if k["status"] == "open" and k["prices"]]
-
-    def other_open(s):
-        rel = (s["matches"].get(str(m["mid"])) or {}).get("listings") or []
-        return [(x, k) for x in rel if x["role"] != "target" for k in x["ml"] if k["status"] == "open" and k["prices"]]
-
     if not post:
         return "NO READ AFTER THE START (the match moved or the probe stopped early) - nothing learned"
-    base = {tuple(map(tuple, k["prices"])) for s in pre for k in target_open(s)}
-    same = [(s, k) for s in post for k in target_open(s)]
-    other = [(s, x, k) for s in post for x, k in other_open(s)]
-    if same:
-        moved = {tuple(map(tuple, k["prices"])) for _, k in same} - base
-        cut = sorted({("absent" if not k["cutoffAt"] else "past" if iso(k["cutoffAt"]) <= iso(s["at"]) else "future")
-                      for s, k in same})
-        return (f"PRICED IN PLAY ON THE SAME LISTING - its moneyline was open after the start in {len(same)} read(s), "
-                f"prices {'MOVED' if moved else 'did not move'} from pre-match, cutoffAt {'/'.join(cut)}. "
-                + ("The sidecar's cutoffAt gate drops exactly this: a cricket-only pass-through would fix it."
-                   if "past" in cut else "cutoffAt is not past, so the cutoff gate is NOT what blocks it - look at "
-                                         "the sidecar's live subscription for cricket."))
-    if other:
-        x = other[0][1]
-        return (f"PRICED IN PLAY ON A SEPARATE LISTING - {x['role']} {x['id']} (units {x['units']}, liveMode "
-                f"{x['liveMode']}) had an open moneyline after the start; the sidecar did not link it - a linking fix.")
-    return ("NOT PRICED IN PLAY - after the start no open moneyline on this match anywhere on the board "
-            "(the original listing closed and nothing replaced it).")
+
+    def rel(s):
+        return (s["matches"].get(str(m["mid"])) or {}).get("listings") or []
+
+    def opened(x):
+        return [k for k in x["ml"] if k["status"] == "open" and k["prices"]]
+
+    def px(k):
+        return tuple(map(tuple, k["prices"]))
+
+    seen: dict = {}                        # listing id -> what it showed after the start, in read order
+    for s in post:
+        for x in rel(s):
+            e = seen.setdefault(x["id"], {"x": x, "prices": [], "flags": set(), "cut": set(), "status": set(),
+                                          "reads": 0})
+            e["x"] = x
+            e["flags"].update(live_flags(x))
+            e["status"].add(str(x.get("status")))
+            ks = opened(x)
+            e["reads"] += bool(ks)
+            for k in ks:
+                e["prices"].append(px(k))
+                e["cut"].add("absent" if not k["cutoffAt"] else
+                             "past" if iso(k["cutoffAt"]) <= iso(s["at"]) else "future")
+    base = {px(k) for s in pre for x in rel(s) if x["role"] == "target" for k in opened(x)}
+
+    def moved(e) -> bool:
+        if not e["prices"]:
+            return False
+        ref = base if e["x"]["role"] == "target" and base else {e["prices"][0]}
+        return any(p not in ref for p in e["prices"])
+
+    def evidence(e) -> str:
+        return ", ".join(sorted(e["flags"]) + (["price moved"] if moved(e) else []))
+
+    # Who was in play at all - a live listing whose names share this match's name words ("brisbane heat w" next to
+    # "brisbane heat") is one the linking above (parentId / exact names) would miss, so it must not read as "not
+    # priced". Two shared words (or all of a one-word side's) keep a mere shared city from counting.
+    def words(ns) -> set:
+        return {w for n in ns for w in re.findall(r"[a-z]+", str(n).lower()) if len(w) >= 4 and w not in
+                ("women", "womens")}
+    mine = words(m.get("names") or ())
+    near = {}
+    for s in post:
+        for y in s.get("live_board") or []:
+            if mine and y.get("id") not in seen and len(words(y.get("names") or ()) & mine) >= min(2, len(mine)):
+                near[y.get("id")] = y
+    sizes = [b for b in (s.get("live_board_size") for s in post) if b is not None]
+    board_note = ("Pinnacle's cricket live board was EMPTY at every read after the start" if sizes and not any(sizes)
+                  else f"Pinnacle's cricket live board held up to {max(sizes)} matchup(s)" if sizes
+                  else "Pinnacle's live board could not be read")
+    if near:
+        y = next(iter(near.values()))
+        board_note += (f", and {y.get('id')} ({' / '.join(y.get('names') or [])}, liveMode {y.get('liveMode')}) on it "
+                       "shares this match's names but is not linked to it")
+
+    tgt = seen.get(m["mid"])
+    others = [e for i, e in seen.items() if i != m["mid"] and e["prices"]]
+    live_other = [e for e in others if e["flags"] or moved(e)]
+    if live_other:
+        e = live_other[0]
+        x = e["x"]
+        return (f"PRICED IN PLAY ON A SEPARATE LISTING - {x['role']} {x['id']} (units {x['units']}) had an open "
+                f"moneyline after the start in {e['reads']} read(s) ({evidence(e)}). {sidecar_note(m, post)}")
+    if tgt and tgt["prices"] and (tgt["flags"] or moved(tgt)):
+        if tgt["flags"]:
+            cut = sorted(tgt["cut"])
+            return (f"PRICED IN PLAY ON THE SAME LISTING - its moneyline was open after the start in {tgt['reads']} "
+                    f"read(s) ({evidence(tgt)}), cutoffAt {'/'.join(cut)}. "
+                    + ("The sidecar's cutoffAt gate drops exactly this: a cricket-only pass-through would fix it."
+                       if "past" in cut else "cutoffAt is not past, so the cutoff gate is NOT what blocks it - look "
+                                             "at the sidecar's live subscription for cricket."))
+        first = next(iter(base)) if base else tgt["prices"][0]
+        return (f"PRICE MOVED AFTER THE START BUT NO LIVE FLAG - the pre-match listing stayed open and its price "
+                f"went {fmt_px(first)} -> {fmt_px(tgt['prices'][-1])} while Pinnacle never flagged it live: in play on "
+                "the same listing, or a delayed start being re-priced. Check when the match really started before "
+                f"building anything; {board_note}.")
+    shut = [e for e in seen.values() if e["flags"] and not e["prices"]]
+    if shut:
+        e = shut[0]
+        return (f"LIVE BUT NO OPEN MONEYLINE - Pinnacle flagged {e['x']['role']} {e['x']['id']} live "
+                f"({', '.join(sorted(e['flags']))}) but its moneyline was suspended or missing at every read: too few "
+                "reads to tell, re-run with more.")
+    if near:
+        y = next(iter(near.values()))
+        return (f"MAYBE PRICED IN PLAY ON AN UNLINKED LISTING - {y.get('id')} ({' / '.join(y.get('names') or [])}, "
+                f"liveMode {y.get('liveMode')}) was on Pinnacle's live board after the start and shares this match's "
+                "names, but it is not this match's child and its names differ, so nothing here links it ("
+                + ("this match's own listing stayed up, frozen" if tgt and tgt["prices"] else "this match's own "
+                   "listing closed") + "). Check it by hand before pulling cricket.")
+    if tgt and tgt["prices"]:
+        last = tgt["prices"][-1]
+        return (f"NOT PRICED IN PLAY - the pre-match listing stayed up after the start but never went live: status "
+                f"{'/'.join(sorted(tgt['status']))}, isLive / liveMode / live board all off in {tgt['reads']} read(s), "
+                f"price never moved ({fmt_px(last)}{', the pre-match price' if last in base else ''}); {board_note}. "
+                "A stale listing, not an in-play price: the sidecar's cutoffAt gate is right to drop it, and a "
+                "pass-through would feed the shadow a frozen price.")
+    if others:
+        e = others[0]
+        return (f"NOT PRICED IN PLAY - {e['x']['role']} {e['x']['id']} stayed open after the start but never went "
+                f"live and its price never moved ({fmt_px(e['prices'][-1])}); {board_note}.")
+    return ("NOT PRICED IN PLAY - after the start no open moneyline on this match anywhere on the board (the "
+            f"original listing closed and nothing replaced it); {board_note}.")
 
 
 def probe(matches: list[dict], now_only: bool) -> None:
