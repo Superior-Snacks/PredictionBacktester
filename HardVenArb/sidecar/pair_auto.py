@@ -571,7 +571,8 @@ def duplicate_token_validate(pairs: list[dict]) -> tuple:
 
 def price_validate(pairs: list[dict], sidecar: str, tol: float, keep_side: set | None = None,
                    kept_out: list | None = None, live_max_age: float | None = None,
-                   stale_out: list | None = None, kalshi_paused: bool = False) -> tuple:
+                   stale_out: list | None = None, kalshi_paused: bool = False,
+                   tight: dict | None = None, tight_out: list | None = None) -> tuple:
     """PRICE-CONSISTENCY GATE. For each filled pair, the Kalshi-YES probability (kalshi_yes_price, from
     pairHard) and the bookmaker yes-token's implied prob must AGREE on the favorite — both are P(the same
     team). If they're COMPLEMENTS (book ≈ 1 − kalshi) the two sides are inverted → swap the tokens. If
@@ -606,7 +607,16 @@ def price_validate(pairs: list[dict], sidecar: str, tol: float, keep_side: set |
     paused (weekly maintenance), so its side is the frozen one. No in-play row is judged, however fresh Pinnacle's
     price: each stands, counted unvalidated, its ticker appended to `stale_out`. The 08:31 run of 11-19 had cleared
     3 in-play tennis rows as "wrong game" on Kalshi's last trade before the halt, 0.26-0.37 off Pinnacle's live
-    price after 30 min of play. Pre-match rows are judged as before."""
+    price after 30 min of play. Pre-match rows are judged as before.
+
+    `tight` (pair_pinnacle, 2026-11-27): {id(row): tolerance} for tennis rows whose player shares only a SURNAME with
+    Kalshi's (the given names clash) - the same player rendered otherwise, or another player, and only the price can
+    tell. Such a row is judged on its named side, never swapped, on Pinnacle's DE-VIGGED price (both tokens priced;
+    else the yes token's), and STANDS only when Kalshi agrees within its tolerance on a price at least 0.10 from a coin
+    flip. Anything else CLEARS it: no price (not quoted yet, in play on a frozen price, Kalshi halted), a coin flip
+    (two matches near even agree by construction), or apart. Each is appended to `tight_out` as (ticker, verdict,
+    kalshi_yes, book_yes), verdict 'ok' / 'unpriced' / 'even' / 'apart'. Measured on every such row since 08-24: a
+    right one sat 0.00-0.02 from Kalshi (median), a wrong one 0.09-0.22 - inside the 0.12 the scheduler's gate allows."""
     tokens = {e[k] for e in pairs for k in ("hardven_yes_token", "hardven_no_token") if e.get(k)}
     stale: set = set()
     fkw = {}
@@ -651,6 +661,21 @@ def price_validate(pairs: list[dict], sidecar: str, tol: float, keep_side: set |
         if not (yt and nt):
             continue
         by = implied.get(yt)
+        if tight and id(e) in tight:
+            tk = e.get("kalshi_ticker", "?")
+            pn = implied.get(nt)
+            p = by / (by + pn) if (by is not None and pn and by + pn > 0) else by
+            v = ("unpriced" if (ky is None or p is None) else "apart" if abs(ky - p) > tight[id(e)]
+                 else "even" if abs(p - 0.5) < 0.10 else "ok")
+            if tight_out is not None:
+                tight_out.append((tk, v, ky, None if p is None else round(p, 4)))
+            if v == "ok":
+                consistent += 1
+            else:
+                e["hardven_yes_token"] = e["hardven_no_token"] = ""
+                e.pop("fuzzy", None)
+                rejected += 1
+            continue
         if ky is None or by is None:
             unvalidated += 1
             if by is None and yt in stale and stale_out is not None:

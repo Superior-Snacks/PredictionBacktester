@@ -116,12 +116,16 @@ for k, b in [("UTSA", "Texas San Antonio"), ("Saint Mary's", "Saint Marys CA"), 
              ("USC Upstate", "South Carolina Upstate"), ("USC Upstate", "USC Upstate"),
              ("Purdue Fort Wayne", "Purdue Fort Wayne"), ("Purdue Fort Wayne", "Fort Wayne"),
              ("Texas A&M-Corpus Christi", "Texas A&M-Corpus Christi"), ("Texas A&M-Corpus Christi", "Texas A&M Corpus Christi"),
-             ("Saint Joseph's", "Saint Josephs"), ("Saint Joseph's", "St. Joseph's"), ("Saint Joseph's", "Saint Joseph's")]:
+             ("Saint Joseph's", "Saint Josephs"), ("Saint Joseph's", "St. Joseph's"), ("Saint Joseph's", "Saint Joseph's"),
+             # 11-27 15:56, caught by the unpaired-board log: Pinnacle's spelling and the long one
+             ("UMBC", "MD Baltimore County"), ("UMBC", "Maryland Baltimore County"),
+             ("East Tennessee St.", "East Tenn State"), ("East Tennessee St.", "East Tennessee State")]:
     folded = P._canon_team(_norm(k), NCAA)
     sim = _team_sim(folded, _book_name(b))
     check(f"{k!r} -> {b!r}", sim == 100, f"folded {folded!r}, score {sim}")
 for k, b in [("Penn", "Penn State"), ("Saint Mary's", "Mount St. Mary's"), ("UTSA", "Texas"),
-             ("UNC Wilmington", "North Carolina")]:
+             ("UNC Wilmington", "North Carolina"), ("UMBC", "Maryland"), ("East Tennessee St.", "Tennessee"),
+             ("East Tennessee St.", "Tennessee State")]:
     sim = _team_sim(P._canon_team(_norm(k), NCAA), _book_name(b))
     check(f"{k!r} is NOT {b!r}", sim < 100, f"score {sim}")
 check("college 'oakland' stays oakland (the MLB alias skipped)", P._canon_team("oakland", NCAA) == "oakland")
@@ -141,6 +145,11 @@ check("'Penn' does NOT agree with Towson", not agree(NCAA, "Penn", "Towson"))
 check("'UTSA' agrees with Texas San Antonio", agree(NCAA, "UTSA", "Texas San Antonio"))
 check("'UTSA' does NOT agree with Texas (the WHOLE target, not a shared token)", not agree(NCAA, "UTSA", "Texas"))
 check("'UMass Lowell' agrees with Massachusetts Lowell", agree(NCAA, "UMass Lowell", "Massachusetts Lowell"))
+check("'UMBC' agrees with MD Baltimore County", agree(NCAA, "UMBC", "MD Baltimore County"))
+check("'UMBC' does NOT agree with George Washington", not agree(NCAA, "UMBC", "George Washington"))
+check("YES 'umbc' -> MD Baltimore County, not George Washington",
+      P._pick_yes_team(P._canon_team("umbc", NCAA), [_book_name("MD Baltimore County"), _book_name("George Washington")],
+                       NCAA) == "md baltimore county")
 check("a token match still agrees ('Oakland' / Oakland)", agree(NCAA, "Oakland", "Oakland"))
 check("no alias, no shared token -> disagrees ('Towson' / Pennsylvania)", not agree(NCAA, "Towson", "Pennsylvania"))
 check("outside basketball an alias does not count ('UCF', tennis)", not agree("KXATPMATCH-X-Y", "UCF", "Central Florida"))

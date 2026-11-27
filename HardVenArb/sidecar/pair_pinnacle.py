@@ -36,7 +36,7 @@ sys.stdout.reconfigure(encoding="utf-8")  # Windows console: tolerate accented n
 # Venue-independent pieces — the Kalshi-side parsing, generic name matching, league anchor, price gate.
 # Reused verbatim so the two matchers can't diverge on the Kalshi shapes pairHard produces.
 from pair_auto import (
-    _norm, _book_name, kalshi_key, _pick_book_team, _best_book_game, _better_listing,
+    _norm, _book_name, kalshi_key, _pick_book_team, _best_book_game, _better_listing, _team_sim,
     _expected_sports, _kalshi_dt, fetch_catalog, price_validate, fuzz,
 )
 from env_util import atomic_write_json
@@ -129,7 +129,11 @@ _TEAM_ALIASES = {"a s": "athletics", "as": "athletics", "oakland": "athletics", 
                  "usc upstate": "upstate",                         # USC Upstate / South Carolina Upstate
                  "purdue fort wayne": "fort wayne",                # Purdue Fort Wayne / Fort Wayne
                  "texas a m corpus christi": "corpus christi",     # Texas A&M Corpus Christi / A&M-Corpus Christi
-                 "saint joseph s": "joseph"}                       # Saint Josephs / St. Joseph's
+                 "saint joseph s": "joseph",                       # Saint Josephs / St. Joseph's
+                 # 2026-11-27 15:56 - the unpaired-board log's first real catches (pair_unused.jsonl). The target is in
+                 # the spelling Pinnacle used AND the long one ("East Tennessee State", "Maryland Baltimore County").
+                 "umbc": "baltimore county",                       # MD Baltimore County
+                 "east tennessee st": "east tenn"}                 # East Tenn State
 # One table serves every sport, and these are the MLB Athletics and White Sox: in basketball "oakland" is a college
 # (Oakland v Houston, 2026-11-27, never paired - it became "athletics") and "sacramento" an NBA city. Basketball
 # skips them (_bb_alias).
@@ -285,6 +289,165 @@ def _esports_index(book: dict) -> dict:
     return out
 
 
+# ── TENNIS: THE SURNAMES FIND THE GAME, THE FULL NAMES HAVE TO AGREE WITH IT (2026-11-27) ─────────────────────────
+# Kalshi titles a match by surnames ("Liu vs Li", "Shin vs Ho") and the matcher takes the Pinnacle game whose two
+# names CONTAIN them, as plain substrings. A short surname sits inside other names, and one surname is often two
+# players in the same week. An audit of every tennis pair since 2026-08-24 (pair_ledger.jsonl against the bot's own
+# priced rows) found 7 rows on the WRONG match, all made that way, none of them traded:
+#   - "li" inside "Maddison Inglis" (LIULIX), "ho" inside "Thomas Fancutt" (SHIHOX), "wang" inside "Mananchaya
+#     Sawangkaew" (WANSUN);
+#   - and Kalshi's player sharing only a surname with Pinnacle's: Meng Yi / Xing Dao Chen (HANCHE), Sohee / Onyu Choi
+#     (SATCHO), Xing Dao / Yan Cheng Chen (CHEHAN), Tatjana Maria / Isabella Maria Serban (MARMAX), Jiumeng / Claire
+#     Liu (LIULIX again).
+# Two of them were women's markets on a MEN's game (HANCHE, SHIHOX), and three took a game that another Kalshi event
+# had already paired correctly. The name audit passed every one (a shared surname is a shared name token), and the
+# price gate passed every one it priced: the wrong match sat 0.09-0.22 from Kalshi (median), a right pair 0.00-0.02.
+# So a tennis market now sees only the games that
+#   1. sit in a league of its gender ("ITF Men" / "ATP" / "Challenger" vs "ITF Women" / "WTA"; a league naming neither
+#      passes),
+#   2. hold each of Kalshi's surnames as WHOLE words, in different players' names ("li" is not in "inglis"),
+#   3. and when one of those games also agrees with Kalshi's FULL names (given names too), only that one.
+# A row whose given names still CLASH with Kalshi's (the same surname, other first names) is either the same player
+# under another rendering or another player, and the history has both, about evenly. Only the price can tell, so the
+# price gate judges it on its own, tighter terms (price_validate's `tight`, HARDVEN_PAIR_CLASH_TOL, default 0.05) and
+# clears it whenever it cannot (no price, a coin flip). Renderings seen on real pairs are in _GIVEN_VARIANTS.
+_TENNIS_SERIES = set(sports_cfg.CATALOG["tennis"].moneyline)
+_TENNIS_WOMEN = {"KXWTAMATCH", "KXITFWMATCH", "KXWTACHALLENGERMATCH"}
+# Given names that are one name: transliterations and short forms, each seen on a real pair whose prices agreed at
+# 0-2c (the audit above). A name agrees with every other name in its group, and only next to a shared surname.
+_GIVEN_VARIANTS = tuple(frozenset(g) for g in (
+    {"aleksandr", "alexander", "alexandr", "oleksandr", "sasha"},   # Shevchenko (ATP 11-12), Rozin (ITF 10-28)
+    {"aleksandra", "alexandra", "oleksandra", "sasha"},
+    {"pyotr", "petr", "piotr"},                                     # Nesterov (Challenger, 3 matches in Sep)
+    {"yara", "yaroslava"},                                           # Bartashevich (ITF Women, 8 matches Sep-Nov)
+    {"masha", "maria", "mariia", "mariya", "marija"},                # Lazarenko (ITF Women 09-08)
+    {"menelaos", "melios"},                                          # Efstathiou (Challenger 11-10, 11-25)
+    {"qian", "yingqun"},                                             # Sun (ITF 11-05)
+))
+# Name parts too common to tell two players apart on their own (pair_auto's _NAME_PARTICLES and the short ones).
+_TENNIS_PARTICLES = {"da", "de", "di", "do", "du", "dos", "das", "del", "della", "dela", "van", "von", "der", "den",
+                     "la", "le", "el", "al", "bin", "ben", "jr", "junior", "senior", "santos", "sousa", "silva"}
+
+
+def _is_tennis(ticker: str) -> bool:
+    return (ticker or "").split("-")[0].upper() in _TENNIS_SERIES
+
+
+def _tennis_gender(league_name: str) -> str:
+    """'W' / 'M' from a Pinnacle tennis league's name ('ITF Women Tianjin - R1', 'ATP Challenger Seoul -
+    Qualifiers'), '' when it names neither (a team cup, an exhibition)."""
+    w = _norm(league_name or "").split()
+    if not w:
+        return ""
+    if "women" in w or "womens" in w or w[0] == "wta" or "billie" in w:
+        return "W"
+    if "men" in w or "mens" in w or w[0] in ("atp", "challenger") or "davis" in w:
+        return "M"
+    return ""
+
+
+def _given_agree(a: str, b: str) -> bool:
+    """Two given-name parts that can be one name: equal, an initial, a short form ('alex'/'alexander'), a spelling
+    ('jazmin'/'jasmin', 'yury'/'yuri') or a known rendering (_GIVEN_VARIANTS)."""
+    if a == b:
+        return True
+    s, l = sorted((a, b), key=len)
+    if l.startswith(s) and (len(s) == 1 or len(s) >= 4):
+        return True
+    if any(a in g and b in g for g in _GIVEN_VARIANTS):
+        return True
+    return fuzz is not None and fuzz.ratio(a, b) >= 75
+
+
+def _player_verdict(kalshi_name: str, pin_name: str) -> str:
+    """Is Pinnacle's player Kalshi's? 'same', 'clash' (they share a surname but the given names differ: the same player
+    rendered otherwise, or another one), 'none' (no common name part), '' (a name is missing)."""
+    kt, pt = _norm(kalshi_name or "").split(), _norm(pin_name or "").split()
+    if not kt or not pt:
+        return ""
+    shared = set(kt) & set(pt)
+    if not shared:
+        return "none"
+    if len({t for t in shared if len(t) >= 3 and t not in _TENNIS_PARTICLES}) >= 2:
+        return "same"             # a given name and a surname in common ('Maria Camila Osorio' / 'Maria Osorio Serrano')
+    kr, pr = [t for t in kt if t not in shared], [t for t in pt if t not in shared]
+    if not kr or not pr:
+        return "same"             # one name inside the other ('Felipe Meligeni Alves' / '... Rodrigues Alves')
+    if "".join(kr) == "".join(pr) or any(_given_agree(a, b) for a in kr for b in pr):
+        return "same"             # 'Meng Yi' / 'Mengyi', 'Yara' / 'Yaroslava'
+    return "clash"
+
+
+def _words_in(part: str, name: str) -> bool:
+    """A Kalshi title name ('li', 'andrade da silva') and Pinnacle's name are the same WHOLE words, one inside the
+    other: the title's inside Pinnacle's, or Pinnacle's (two words or more) inside the title's - a title can carry the
+    full name ('Joao Lucas Reis Da Silva', Pinnacle 'Joao Reis da Silva', 11-06). The matcher's own test took both
+    directions and, as a plain substring, also 'li' inside 'inglis'; this one takes both, as words."""
+    k, p = set(_norm(part or "").split()), set(_norm(name or "").split())
+    return bool(k and p) and (k <= p or (len(p) >= 2 and p <= k))
+
+
+def _tennis_view(book: dict, ticker: str, teams, outcome: str, opponent: str):
+    """The board as a tennis market may see it (see TENNIS above) -> (view, refused), `view` shaped like `book`,
+    `refused` = {team-set: why it is not in the view} for the games the surnames alone would have matched. `teams` is
+    the title's two surnames as the matcher holds them, `outcome` / `opponent` Kalshi's two full names ('' unknown)."""
+    parts = list(teams)
+    if len(parts) != 2:
+        return book, {}
+    want = "W" if (ticker or "").split("-")[0].upper() in _TENNIS_WOMEN else "M"
+    kept, refused = {}, {}
+    for key, games in book.items():
+        names = list(key)
+        if len(names) != 2:
+            continue
+        gs = [g for g in games if (g.get("sport") or "").upper() == "TENNIS"]
+        if not gs:
+            continue
+        straight = _words_in(parts[0], names[0]) and _words_in(parts[1], names[1])
+        crossed = _words_in(parts[0], names[1]) and _words_in(parts[1], names[0])
+        if not (straight or crossed):
+            # what plain containment (the matcher's own test) would have taken: say why it is not taken now, on the
+            # way of lining the surnames up that has the most whole-word fits ('liu' -> 'claire liu', 'li' -> 'inglis')
+            ways = [w for w in (((parts[0], names[0]), (parts[1], names[1])), ((parts[0], names[1]), (parts[1], names[0])))
+                    if all(p in n for p, n in w)]
+            if ways:
+                w = max(ways, key=lambda w: sum(_words_in(p, n) for p, n in w))
+                inside = next(((p, n) for p, n in w if not _words_in(p, n)), None)
+                refused[key] = (f"'{inside[0]}' is only inside '{inside[1]}', not a name of its own" if inside
+                                else "Kalshi's surnames are not whole names there")
+            continue
+        g_ok = [g for g in gs if _tennis_gender(g.get("league_name") or "") in ("", want)]
+        if not g_ok:
+            refused[key] = (f"a {'men' if want == 'W' else 'women'}'s league ({gs[0].get('league_name') or '?'}) for "
+                            f"a {'women' if want == 'W' else 'men'}'s market")
+            continue
+        # Kalshi's two full names against the two players, lined up by the surname each carries
+        ways = ([(names[0], names[1])] if straight else []) + ([(names[1], names[0])] if crossed else [])
+        best = None                            # (rank, (verdict, kalshi, pinnacle) per side)
+        for po, pp in ways:
+            for k_a, k_b in ((outcome, opponent), (opponent, outcome)):
+                if not k_a or not any(_words_in(p, k_a) and _words_in(p, po) for p in parts):
+                    continue                   # k_a's surname is not the one Pinnacle's `po` carries
+                sides = ((_player_verdict(k_a, po), k_a, po), (_player_verdict(k_b, pp), k_b, pp))
+                vs = (sides[0][0], sides[1][0])
+                rank = 0 if "none" in vs else 1 if "clash" in vs else 2
+                if best is None or rank > best[0]:
+                    best = (rank, sides)
+        if best and best[0] == 0:
+            _, k, p = next(s for s in best[1] if s[0] == "none")
+            refused[key] = f"Kalshi's '{k}' shares no name with Pinnacle's '{p}'"
+            continue
+        # Kalshi's full names unknown or not placeable on this game: the surnames alone, as before (rank 1)
+        kept[key] = (best[0] if best else 1, best, g_ok)
+    if any(r == 2 for r, _, _ in kept.values()):              # a game that names Kalshi's players: only those
+        for key in [k for k, (r, _, _) in kept.items() if r != 2]:
+            _, b, _ = kept.pop(key)
+            clash = next((s for s in b[1] if s[0] == "clash"), None) if b else None
+            refused[key] = ("another game names Kalshi's players" + (f"; here '{clash[1]}' meets '{clash[2]}', only "
+                            f"the surname in common" if clash else ""))
+    return {k: gs for k, (_, _, gs) in kept.items()}, refused
+
+
 def _name_tok3(x: str) -> set:
     """The name tokens of 3+ letters that the side checks compare (digits and short words dropped)."""
     return {w for w in re.sub(r"[^a-z ]", " ", (x or "").lower()).split() if len(w) >= 3}
@@ -297,6 +460,11 @@ def _names_agree(ticker: str, kalshi_name: str, pin_name: str) -> bool:
     first team."""
     if _is_esports(ticker):
         return bool(kalshi_name and pin_name) and _esports_core(_norm(kalshi_name)) == _esports_core(_norm(pin_name))
+    if _is_tennis(ticker):
+        # TENNIS (2026-11-27): the player test the matcher uses. A surname-only match ('clash') names the same SIDE -
+        # whether it is the same player the price gate decides (see TENNIS above) - and a two-letter name counts:
+        # 'Yi Li' has no 3-letter part, so the token test read a right row as pointing at the opponent.
+        return _player_verdict(kalshi_name, pin_name) in ("same", "clash")
     if _name_tok3(kalshi_name) & _name_tok3(pin_name):
         return True
     # BASKETBALL: AN ALIAS IS EVIDENCE TOO (2026-11-27). Kalshi's "UCF" / "Penn" share no name token with Pinnacle's
@@ -478,7 +646,8 @@ def _name_tokens(name: str) -> set:
     return {w for w in re.sub(r"[^a-z ]", " ", _norm(name or "")).split() if len(w) >= 3}
 
 
-def board_misses(pairs: list, book: dict, filled_now: set, unmatched: list, released: set) -> list:
+def board_misses(pairs: list, book: dict, filled_now: set, unmatched: list, released: set,
+                 refused: dict | None = None) -> list:
     """TENNIS EVENTS PINNACLE'S BOARD LISTS THAT THIS RUN LEFT UNPAIRED (2026-11-18).
 
     The EV bot can only see a match in play that the pair file holds, so a match Pinnacle lists and the pairer
@@ -488,7 +657,11 @@ def board_misses(pairs: list, book: dict, filled_now: set, unmatched: list, rele
     two names, start within 36h of the ticker's date), so a matcher bug cannot hide its own misses. Every event
     with NO paired market at the end of the run (a 2-way fills one market by design) is checked; each hit is
     returned with why the run left it: the matcher's own UNMATCHED reason, "paired then cleared later in this run"
-    (price gate / name audit / mirror check), or the 12h age cap. The bot alerts on these during a session."""
+    (price gate / name audit / mirror check), or the 12h age cap. The bot alerts on these during a session.
+
+    `refused` (2026-11-27) = {event_id: {matchup_id: why}}, the games this run turned down for an event ON PURPOSE - a
+    league of the other gender, or a player who only shares a surname and whose prices disagree (see TENNIS). Those are
+    another match, not a miss, and are skipped; this check's own surname search finds them just as the matcher did."""
     by_event: dict = {}
     for e in pairs:
         tk = e.get("kalshi_ticker") or ""
@@ -530,6 +703,8 @@ def board_misses(pairs: list, book: dict, filled_now: set, unmatched: list, rele
             st = _pin_dt(g.get("start") or "")
             if day and st and abs((st - day).total_seconds()) > 36 * 3600:
                 continue
+            if _game_id(next(iter(g["teams"].values()), "")) in (refused or {}).get(ev, {}):
+                continue                                      # turned down on purpose: another match
             cands.append((abs((st - day).total_seconds()) if (day and st) else 0, g))
         if not cands:
             continue
@@ -544,6 +719,144 @@ def board_misses(pairs: list, book: dict, filled_now: set, unmatched: list, rele
                               "start": g.get("start") or "", "names": sorted(g["teams"])},
                     "why": why})
     return out
+
+
+# ── TEAM-SPORT GAMES ON PINNACLE'S BOARD THAT NO ROW PAIRED (2026-11-27) ──────────────────────────────────────────
+# board_misses works from KALSHI's side: a surname search per unpaired tennis event. For leagues Kalshi lists IN
+# FULL - college and pro basketball, the NFL, MLB - the other direction is sharper: every game Pinnacle prices there
+# is on Kalshi too, so a board game that no row points at is a miss whatever the cause. On 11-27 this direction found
+# all four college misses at once (a name Pinnacle writes differently, two rows the orientation audit cleared, an MLB
+# alias renaming a college) where the run's own log had them among ~50 "not on Pinnacle's board" lines - games
+# Pinnacle had simply not listed yet, which this check never reports (it starts from the board).
+_UNUSED_SPORTS = {"BASKETBALL", "FOOTBALL", "BASEBALL"}
+
+
+def board_unused(pairs: list, book: dict, filled_now: set, unmatched: list, now=None) -> list:
+    """Every 2-team game in _UNUSED_SPORTS on the board that no row of the pair file names (by matchup id, or by the
+    two names a row resolved to - an in-play listing has its own id), with the nearest Kalshi event (both teams'
+    names scored with the matcher's _team_sim, the ticker's date within a day of the start) and why it is unpaired.
+    With `now` (naive UTC), only games starting from 12h before it to 36h after it."""
+    used_ids, used_sets = set(), set()
+    for e in pairs:
+        for k in ("hardven_yes_token", "hardven_no_token"):
+            if (gid := _game_id(e.get(k) or "")):
+                used_ids.add(gid)
+        if e.get("hardven_yes_name") and e.get("hardven_no_name"):
+            used_sets.add(frozenset((e["hardven_yes_name"], e["hardven_no_name"])))
+    events: dict = {}
+    for e in pairs:
+        tk = e.get("kalshi_ticker") or ""
+        if {s.upper() for s in _expected_sports(tk)} & _UNUSED_SPORTS:
+            events.setdefault(e.get("event_id") or tk, []).append(e)
+    # ONLY LEAGUES WE PAIR (2026-11-27, the first live run): football is walked IN FULL (no PINNACLE_LEAGUES entry),
+    # so Pinnacle's college football came in with the NFL, and with no Kalshi college-football series allowed every
+    # one of its 52 games read as a miss - and went to Discord. A league counts when a row of the file is paired in
+    # it, or when its name matches the PINNACLE_LEAGUES pattern of a series the file holds (in that series' sport),
+    # so a league whose every game failed to pair - the case worth an alert most - is still watched.
+    ours_ids = {_league_id(t) for e in pairs for t in (e.get("hardven_yes_token") or "",) if t.count(":") == 2}
+    pats = []
+    for s in {(e.get("kalshi_ticker") or "").split("-")[0].upper() for e in pairs}:
+        if s in sports_cfg.PINNACLE_LEAGUES:
+            pats.append((sports_cfg.PINNACLE_LEAGUES[s], {x.upper() for x in _expected_sports(s)}))
+
+    def ours(g: dict) -> bool:
+        if g.get("league") in ours_ids:
+            return True
+        sp = (g.get("sport") or "").upper()
+        return any(sp in sps and sports_cfg.league_wanted(g.get("league_name") or "", p) for p, sps in pats)
+    why_by: dict = {}
+    for u in unmatched:
+        if u.split():
+            why_by.setdefault(u.split()[0], u)
+    out = []
+    for games in book.values():
+        for g in games:
+            if (g.get("sport") or "").upper() not in _UNUSED_SPORTS or len(g.get("teams") or {}) != 2 or not ours(g):
+                continue
+            if frozenset(g["teams"]) in used_sets or any(_game_id(t) in used_ids for t in g["teams"].values()):
+                continue
+            st = _pin_dt(g.get("start") or "")
+            if now and not (st and -12 * 3600 <= (st - now).total_seconds() <= 36 * 3600):
+                continue                              # a later week's NFL line Kalshi has not listed yet is no miss
+            b1, b2 = sorted(g["teams"])
+            best, best_rank, best_s = None, None, -1
+            for ev, rows in events.items():
+                key = next((k for k in (kalshi_key(r) for r in rows) if k), None)
+                if not key or key[2] or len(key[1]) != 2:
+                    continue
+                tk0 = rows[0].get("kalshi_ticker") or ""
+                day = _ticker_day(tk0)
+                if day and st and abs((st - day).total_seconds()) > 36 * 3600:
+                    continue
+                # Both teams' scores summed, on the folded names AND the raw ones: a fold can be the fault (the MLB
+                # "oakland" alias turned a college into "athletics"), and the diagnosis must still find the game.
+                s = 0
+                for k1, k2 in (sorted(key[1]), sorted(_canon_team(t, tk0) for t in key[1])):
+                    s = max(s, _team_sim(k1, b1) + _team_sim(k2, b2), _team_sim(k1, b2) + _team_sim(k2, b1))
+                rank = (s, -(abs((st - day).total_seconds()) if (day and st) else 0))
+                if best_rank is None or rank > best_rank:
+                    best, best_rank, best_s = (ev, rows), rank, s
+            kalshi, why = "", "Kalshi lists no game of these teams near this one"
+            if best and best_s >= 100:                # one team clean, or both close
+                ev, rows = best
+                tks = sorted(r.get("kalshi_ticker") or "" for r in rows)
+                kalshi = rows[0].get("event_title") or ev
+                why = ("paired by this run's matcher, then cleared later in it (orientation audit / price gate / "
+                       "mirror check)" if any(t in filled_now for t in tks)
+                       else next((why_by[t] for t in tks if t in why_by), "not attempted by the matcher this run"))
+            out.append({"game": _game_id(next(iter(g["teams"].values()))), "sport": g.get("sport") or "",
+                        "board": {"names": [b1, b2], "league": g.get("league_name") or "", "start": g.get("start") or ""},
+                        "kalshi": kalshi, "kalshi_event": best[0] if (best and kalshi) else "",
+                        "score": best_s if kalshi else None, "why": why})
+    return out
+
+
+def _unused_alert(unused: list, state_path: Path, now_iso: str) -> None:
+    """ONE Discord line per run for board games not alerted before (state: pair_unused_alerted.json, game id ->
+    first alert, kept 4 days). HARDVEN_PAIR_UNUSED_ALERT=0 = off; no DISCORD_WEBHOOK_URL = off. Never raises."""
+    if (os.environ.get("HARDVEN_PAIR_UNUSED_ALERT", "1") or "1").strip() in ("0", "false", "no"):
+        return
+    if not (os.environ.get("DISCORD_WEBHOOK_URL") or "").strip():
+        return
+    try:
+        seen = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+    except Exception:
+        seen = {}
+    now = _pin_dt(now_iso)
+    seen = {k: v for k, v in seen.items() if (d := _pin_dt(v)) and now and (now - d).total_seconds() < 4 * 86400}
+    new = [u for u in unused if u["game"] and u["game"] not in seen]
+    if new:
+        lines = []
+        for u in new[:10]:
+            w = u["why"]
+            if "best leg" in w:
+                m = re.search(r"best leg (\d+)", w)
+                w = f"a name differs (best leg {m.group(1) if m else '?'})"
+            elif "cleared later" in w:
+                w = "matched, then cleared by the side/price checks"
+            pretty = [" ".join(w.upper() if (len(w) == 2 and w != "st") else w.capitalize() for w in n.split())
+                      for n in u["board"]["names"]]
+            lines.append(f"• {' v '.join(pretty)} ({u['board']['start'][5:16].replace('T', ' ')}"
+                         f" UTC) - " + (f"Kalshi '{u['kalshi']}': {w}" if u["kalshi"] else w))
+        more = f"\n…and {len(new) - 10} more" if len(new) > 10 else ""
+        msg = (f"🏀 **Pairing: {len(new)} game(s) on Pinnacle's board have no Kalshi pair** (a missed pair, not a "
+               f"wrong one - usually a school name to alias in pair_pinnacle.py; pair_unused.jsonl)\n"
+               + "\n".join(lines) + more)
+        try:
+            import asyncio
+            from notify import Notifier
+            ok = asyncio.run(Notifier("pairing").send(msg))
+        except Exception as ex:
+            ok = False
+            print(f"[PAIR] unpaired-board alert not sent ({type(ex).__name__}: {ex})")
+        if not ok:
+            return                              # not recorded as sent: the next run tries again
+        for u in new:
+            seen[u["game"]] = now_iso
+    try:
+        state_path.write_text(json.dumps(seen), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _sidecar_evidence(sidecar: str, sid: str, probe: dict, timeout: float = 3.0) -> dict:
@@ -755,6 +1068,21 @@ def main() -> None:
         print(f"[PAIR] backfilled resolved names on {backfilled} previously-paired row(s) — those markets "
               f"can be verified (and therefore camped) again.")
 
+    # TENNIS: both of Kalshi's full names, for the player checks (see TENNIS above). A row's opponent is the event's
+    # other market's outcome.
+    kalshi_players: dict[str, dict] = {}
+    for e in pairs:
+        if _is_tennis(e.get("kalshi_ticker") or ""):
+            kalshi_players.setdefault(e.get("event_id") or "", {})[e.get("kalshi_ticker") or ""] = (
+                e.get("kalshi_outcome") or e.get("outcome") or "")
+
+    def _opponent(e: dict) -> str:
+        others = [v for t, v in kalshi_players.get(e.get("event_id") or "", {}).items()
+                  if t != (e.get("kalshi_ticker") or "") and v]
+        return others[0] if len(others) == 1 else ""
+    name_clash: dict[int, dict] = {}       # id(row) -> the clash, for the price gate's tight check
+    tennis_refused: list[dict] = []        # games the surnames alone would have paired, refused (gender / names)
+
     for e in pairs:
         tk = e.get("kalshi_ticker", "?")
         if e.get("hardven_yes_token") and e.get("hardven_no_token"):
@@ -773,7 +1101,11 @@ def main() -> None:
         # A clean containment (Kalshi ⊆ Pinnacle) scores 100 → treated as exact (no fuzzy tag); only sub-100
         # spelling/word-order variants need --fuzzy and get tagged 'fuzzy':true.
         es = _is_esports(tk)
-        raw = (es_book if es else book).get(teams)
+        # Tennis sees only the games its players can be (gender, whole-word surnames, full names - see TENNIS).
+        tn = _is_tennis(tk)
+        bk, refused_here = (_tennis_view(book, tk, teams, e.get("kalshi_outcome") or "", _opponent(e)) if tn
+                            else (book, {}))
+        raw = (es_book if es else bk).get(teams)
         games = [g for g in raw if g.get("sport", "").upper() in expected] if (raw and expected) else raw
         # Cricket: only the games in a league of the match's gender (see _CRICKET_SERIES).
         title = e.get("event_title") or ""
@@ -787,12 +1119,30 @@ def main() -> None:
                 # The best leg is scored for the message alone.
                 cand, fscore = None, _best_book_game(teams, es_book, 101, expected)[1]
             else:
-                cand, fscore = _best_book_game(teams, book, thr, expected)
+                cand, fscore = _best_book_game(teams, bk, thr, expected)
             if cand:
                 kept_g = _cricket_gender_ok(cand, tk, title)
                 gender_cut, cand = gender_cut or not kept_g, kept_g
             if cand:
                 games, is_fuzzy = cand, fscore < 100
+        if not games and refused_here:
+            # what the surnames alone would have paired, and why it is not: said on the UNMATCHED line (board_misses
+            # carries that line as the miss's reason) and logged to pair_name_checks.jsonl
+            old = _best_book_game(teams, book, thr, expected)[0]
+            okey = frozenset(old[0]["teams"]) if old else None
+            if okey in refused_here:
+                g0 = old[0]
+                g0_tok = next(iter(g0["teams"].values()), "")
+                if not any(r["event_id"] == (e.get("event_id") or "") and r["board"]["token"] == g0_tok
+                           for r in tennis_refused):              # once per match, not per market
+                    tennis_refused.append({"ticker": tk, "event_id": e.get("event_id") or "",
+                                           "kalshi": [e.get("kalshi_outcome") or "", _opponent(e)],
+                                           "board": {"names": sorted(okey), "league": g0.get("league_name") or "",
+                                                     "start": g0.get("start") or "", "token": g0_tok},
+                                           "why": refused_here[okey]})
+                unmatched.append(f"{tk}  {sorted(teams)} (refused Pinnacle's '{' v '.join(sorted(okey))}' "
+                                 f"({g0.get('league_name') or '?'}, {g0.get('start') or '?'}): {refused_here[okey]})")
+                continue
         if not games:
             if gender_cut:
                 unmatched.append(f"{tk}  {sorted(teams)} (Pinnacle lists these teams only in a "
@@ -875,6 +1225,15 @@ def main() -> None:
         if not is_tie:
             e["hardven_yes_name"] = yes_key
             e["hardven_no_name"]  = next(k for k in entry["teams"] if k != yes_key)
+        if tn and not is_tie:
+            # a player who shares only a surname with Kalshi's: the price gate decides (its `tight` terms)
+            _opp = _opponent(e)
+            _v = (_player_verdict(e.get("kalshi_outcome") or "", yes_key), _player_verdict(_opp, e["hardven_no_name"]))
+            if "clash" in _v or "none" in _v:
+                name_clash[id(e)] = {"ticker": tk, "event_id": e.get("event_id") or "", "token": yes_tok,
+                                     "kalshi": e.get("kalshi_outcome") or "", "pinnacle": yes_key,
+                                     "kalshi_opponent": _opp, "pinnacle_opponent": e["hardven_no_name"],
+                                     "verdicts": list(_v)}
         if entry["three_way"]:
             e["three_way"] = True   # NO-only hedge (Kalshi NO + Pinnacle back-this-outcome)
             # THE COMPLETE OUTCOME SET, written on every row of the event.
@@ -1041,11 +1400,18 @@ def main() -> None:
     except ValueError:
         live_max_age = 60.0
     kalshi_paused = any(e.get("kalshi_paused") for e in pairs)      # the scaffold read Kalshi in a trading halt
+    # TENNIS NAME CLASHES (see TENNIS above): judged by the gate on tighter terms, cleared whenever it cannot judge.
+    try:
+        clash_tol = float(os.environ.get("HARDVEN_PAIR_CLASH_TOL", "0.05") or 0.05)
+    except ValueError:
+        clash_tol = 0.05
+    tight = {id(e): clash_tol for e in pairs if id(e) in name_clash and e.get("hardven_yes_token")}
+    clash_results: list[tuple] = []         # (ticker, verdict, kalshi_yes, book_yes)
     if not args.no_price_gate:
         gate = price_validate([e for e in pairs if id(e) not in kept_ids], args.sidecar, args.price_tol,
                               keep_side=named_side, kept_out=names_kept,
                               live_max_age=live_max_age if live_max_age > 0 else None, stale_out=stale_live,
-                              kalshi_paused=kalshi_paused)
+                              kalshi_paused=kalshi_paused, tight=tight, tight_out=clash_results)
         if any(gate):
             print(f"[PAIR] price-gate (tol={args.price_tol}): {gate[0]} consistent | {gate[1]} inverted-fixed | "
                   f"{gate[2]} wrong-game rejected | {gate[3]} unvalidated (no price)"
@@ -1054,6 +1420,35 @@ def main() -> None:
                      + ("Kalshi's trading paused (its prices frozen at the halt)" if kalshi_paused
                         else "Pinnacle's price frozen (no session)")
                      if stale_live else ""))
+    else:
+        for e in pairs:                       # no gate, no price: a clash cannot stand
+            if id(e) in tight:
+                e["hardven_yes_token"] = e["hardven_no_token"] = ""
+                clash_results.append((e.get("kalshi_ticker") or "?", "unpriced", None, None))
+    clash_by_tk = {c["ticker"]: c for c in name_clash.values()}
+    _clash_why = {"unpriced": "no price to confirm it by", "even": "a coin flip, where any two matches agree",
+                  "apart": "the prices disagree"}
+    for _tk, _v, _ky, _by in clash_results:
+        c = clash_by_tk.get(_tk, {})
+        _side = (f"'{c.get('kalshi')}' / Pinnacle '{c.get('pinnacle')}'" if c.get("verdicts", ["", ""])[0] != "same"
+                 else f"opponent '{c.get('kalshi_opponent')}' / Pinnacle '{c.get('pinnacle_opponent')}'")
+        _px = f"kalshi_yes={_ky} pinnacle={_by}" if (_ky is not None or _by is not None) else "no price"
+        print(f"[PAIR] NAME-CLASH {_tk}: Kalshi {_side} share only a surname; {_px} (tol {clash_tol}) -> "
+              + ("STANDS, the price confirms it" if _v == "ok" else f"CLEARED: {_clash_why.get(_v, _v)}"))
+        c.update(result=_v, kalshi_yes=_ky, book_yes=_by)
+        if _v != "ok":                        # board_misses' reason for it: this line, not "cleared later"
+            filled_now.discard(_tk)
+            unmatched.append(f"{_tk}  (NAME CLASH: Kalshi {_side} share only a surname - cleared, "
+                             f"{_clash_why.get(_v, _v)})")
+    # Games this run refused ON PURPOSE for an event: board_misses does not report them as its misses. A clash the
+    # prices REJECT is another player; one cleared for want of a price may be the same one and stays reportable.
+    refused_games: dict[str, dict] = {}
+    for r in tennis_refused:
+        refused_games.setdefault(r["event_id"], {})[_game_id(r["board"]["token"])] = r["why"]
+    for c in name_clash.values():             # apart, and not both venues near a coin flip: another player
+        if c.get("result") == "apart" and max(abs(c["kalshi_yes"] - 0.5), abs(c["book_yes"] - 0.5)) >= 0.10:
+            refused_games.setdefault(c["event_id"], {})[_game_id(c["token"])] = (
+                "its player shares only a surname with Kalshi's and the prices disagree")
 
     # ── ORIENTATION AUDIT: does the assigned token actually NAME the outcome? ─────────────────────────
     # THE INVARIANT, checked against the RAW catalog rather than any structure derived from it.
@@ -1140,10 +1535,23 @@ def main() -> None:
     kept_recs = [r for r, _ in kept_log if r["decision"] == "kept"]
     kept_note = (f" | kept {sum(1 for r in kept_recs if r.get('final') == 'kept')} unlisted row(s), released "
                  f"{released} (pair_kept.jsonl)" if kept_log else "")
+    # ── TENNIS PLAYER CHECKS (see TENNIS above): what they turned down this run ──
+    clash_ok = sum(1 for c in name_clash.values() if c.get("result") == "ok")
+    clash_cleared = sum(1 for c in name_clash.values() if c.get("result") not in (None, "ok"))
+    if tennis_refused:
+        print(f"\n[PAIR] {len(tennis_refused)} tennis market(s) REFUSED the game their surnames alone would have "
+              f"paired (pair_name_checks.jsonl):")
+        for r in tennis_refused:
+            print(f"         {r['ticker']}  {' v '.join(x for x in r['kalshi'] if x)}  <-> "
+                  f"{' v '.join(r['board']['names'])} ({r['board']['league']}) - {r['why']}")
+    if tennis_refused or name_clash:
+        kept_note += (f" | tennis names: {len(tennis_refused)} game(s) refused, {clash_ok} surname-only match(es) "
+                      f"confirmed by price, {clash_cleared} cleared (pair_name_checks.jsonl)")
     # ── ON PINNACLE'S BOARD, LEFT UNPAIRED (2026-11-18) - the in-play watch's other half, see board_misses ──
     try:                                       # best-effort: a monitor must never cost a pairing run
         misses = board_misses(pairs, book, filled_now, unmatched,
-                              {rec["ticker"] for rec, _ in kept_log if rec["decision"] == "released"})
+                              {rec["ticker"] for rec, _ in kept_log if rec["decision"] == "released"},
+                              refused=refused_games)
     except Exception as ex:
         misses = []
         print(f"[PAIR] board-miss check skipped ({type(ex).__name__}: {ex})")
@@ -1154,6 +1562,18 @@ def main() -> None:
             print(f"         {m['event_id']}  {m['kalshi']}  <-> {' vs '.join(m['board']['names'])} "
                   f"({m['board']['league']}, {m['board']['start']}) - {m['why']}")
         kept_note += f" | {len(misses)} on Pinnacle's board left unpaired (pair_misses.jsonl)"
+    try:                                       # best-effort, like board_misses
+        unused = board_unused(pairs, book, filled_now, unmatched, now=_pin_dt(now_iso))
+    except Exception as ex:
+        unused = []
+        print(f"[PAIR] unpaired-board check skipped ({type(ex).__name__}: {ex})")
+    if unused:
+        print(f"\n[PAIR] *** {len(unused)} game(s) ON PINNACLE'S BOARD that no Kalshi row paired "
+              f"(basketball / football / baseball; pair_unused.jsonl): ***")
+        for u in unused:
+            print(f"         {' v '.join(u['board']['names'])} ({u['board']['league']}, {u['board']['start']}) <-> "
+                  f"{u['kalshi'] or '-'} - {u['why']}")
+        kept_note += f" | {len(unused)} team game(s) on Pinnacle's board unpaired (pair_unused.jsonl)"
     if args.write and (filled or gate[1] or gate[2] or url_n or start_n or backfilled or repointed or stamped
                        or named or misoriented or retracted):
         atomic_write_json(args.pairs, pairs)   # atomic → the C# hot-reload never reads a partial cross_pairs.json
@@ -1189,8 +1609,22 @@ def main() -> None:
                 fh.write(json.dumps({"at": now_iso, "run": {"misses": len(misses)}}) + "\n")
                 for m in misses:
                     fh.write(json.dumps(dict(m, at=now_iso)) + "\n")
+            with open(Path(args.pairs).with_name("pair_unused.jsonl"), "a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"at": now_iso, "run": {"unused": len(unused)}}) + "\n")
+                for u in unused:
+                    fh.write(json.dumps(dict(u, at=now_iso)) + "\n")
+            # The tennis player checks (2026-11-27): a run record every run, then what they turned down or price-checked
+            # - the record of whether they ever refuse a RIGHT pair (a name rendering to add to _GIVEN_VARIANTS).
+            with open(Path(args.pairs).with_name("pair_name_checks.jsonl"), "a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"at": now_iso, "run": {"refused": len(tennis_refused), "clash_ok": clash_ok,
+                                                            "clash_cleared": clash_cleared}}) + "\n")
+                for r in tennis_refused:
+                    fh.write(json.dumps(dict(r, at=now_iso, kind="refused")) + "\n")
+                for c in name_clash.values():
+                    fh.write(json.dumps(dict(c, at=now_iso, kind="clash")) + "\n")
         except Exception as ex:
             print(f"[PAIR] kept-row log skipped ({type(ex).__name__}: {ex})")
+        _unused_alert(unused, Path(args.pairs).with_name("pair_unused_alerted.json"), now_iso)
 
 
 if __name__ == "__main__":
