@@ -109,11 +109,40 @@ _TEAM_ALIASES = {"a s": "athletics", "as": "athletics", "oakland": "athletics", 
                  "southern university": "southern",                # Southern
                  "louisiana monroe": "ul monroe",                  # UL - Monroe
                  "maryland eastern shore": "md eastern shore",     # MD Eastern Shore
-                 "ucf": "central florida"}                         # Central Florida
+                 "ucf": "central florida",                         # Central Florida
+                 # 2026-11-26 - the college-only shadow's first run (both listed, scored 28 and 84). Saint Mary's maps
+                 # to Pinnacle's FULL form: a bare "saint marys" is also inside a "Mount Saint Marys".
+                 "utsa": "texas san antonio",                      # Texas San Antonio
+                 "saint mary s": "saint marys ca",                 # Saint Marys CA
+                 # 2026-11-27 - the next day's board. "penn" is also inside "Penn State", so it maps to the full name.
+                 "unc wilmington": "nc wilmington",                # NC Wilmington (scored 60)
+                 "penn": "pennsylvania",                           # Pennsylvania
+                 # The same day, for Kalshi schools Pinnacle had NOT listed yet (none of its 308 college names on
+                 # record). Each target is a part of Kalshi's own name as well, so the game still pairs if Pinnacle
+                 # writes the school the way Kalshi does, and no other school's name contains it. Pinnacle writes
+                 # "NC Wilmington" / "NC State" / "SE Louisiana" / "Cal State Northridge".
+                 "unc asheville": "nc asheville",
+                 "unc greensboro": "nc greensboro",
+                 "umass lowell": "lowell",                         # UMass Lowell / Massachusetts Lowell
+                 "grambling st": "grambling",                      # Grambling State / Grambling
+                 "central connecticut st": "central connecticut",  # Central Connecticut (State)
+                 "usc upstate": "upstate",                         # USC Upstate / South Carolina Upstate
+                 "purdue fort wayne": "fort wayne",                # Purdue Fort Wayne / Fort Wayne
+                 "texas a m corpus christi": "corpus christi",     # Texas A&M Corpus Christi / A&M-Corpus Christi
+                 "saint joseph s": "joseph"}                       # Saint Josephs / St. Joseph's
+# One table serves every sport, and these are the MLB Athletics and White Sox: in basketball "oakland" is a college
+# (Oakland v Houston, 2026-11-27, never paired - it became "athletics") and "sacramento" an NBA city. Basketball
+# skips them (_bb_alias).
+_MLB_ONLY_ALIASES = frozenset({"a s", "as", "oakland", "sacramento", "chicago ws"})
 
 
 def _canon(key: str) -> str:
     return _TEAM_ALIASES.get(key, key)
+
+
+def _bb_alias(key: str) -> str:
+    """_canon for a basketball name: the aliases minus the MLB-only ones."""
+    return key if key in _MLB_ONLY_ALIASES else _canon(key)
 
 
 # NFL: Kalshi titles a game "CHI Bears vs GB Packers" - a city CODE plus the nickname - and neither "chi bears"
@@ -268,7 +297,19 @@ def _names_agree(ticker: str, kalshi_name: str, pin_name: str) -> bool:
     first team."""
     if _is_esports(ticker):
         return bool(kalshi_name and pin_name) and _esports_core(_norm(kalshi_name)) == _esports_core(_norm(pin_name))
-    return bool(_name_tok3(kalshi_name) & _name_tok3(pin_name))
+    if _name_tok3(kalshi_name) & _name_tok3(pin_name):
+        return True
+    # BASKETBALL: AN ALIAS IS EVIDENCE TOO (2026-11-27). Kalshi's "UCF" / "Penn" share no name token with Pinnacle's
+    # "Central Florida" / "Pennsylvania", so the orientation audit cleared rows the matcher had paired RIGHT through
+    # an alias, and both games went unpaired. An alias is a curated statement that two names are one school: agree
+    # when the outcome HAS one and its whole target is inside the token's raw name - the matcher's own containment,
+    # read against the raw catalog. The whole target, not a shared token: "texas san antonio" (UTSA) shares "texas"
+    # with Texas, and must not agree with it.
+    if (ticker or "").split("-")[0].upper() in _BB_SERIES:
+        k = _norm(kalshi_name)
+        a = _bb_alias(k)
+        return bool(k) and a != k and a in _book_name(pin_name)
+    return False
 
 
 def _canon_team(key: str, ticker: str) -> str:
@@ -281,7 +322,7 @@ def _canon_team(key: str, ticker: str) -> str:
     if series in _CRICKET_SERIES:
         return _canon(_cricket_core(key))
     if series in _BB_SERIES:
-        aliased = _canon(key)
+        aliased = _bb_alias(key)
         return aliased if aliased != key else _bb_core(key)
     if series == "KXNFLGAME":
         code, _, nick = key.partition(" ")

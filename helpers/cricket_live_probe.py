@@ -11,6 +11,11 @@ its pre-match price in every read. The first version of verdict() called that "p
 recommended a cutoffAt pass-through, which would have fed the shadow a frozen price. The verdict now needs Pinnacle's
 own live flags (isLive / liveMode / the live board) or a price that moves; see live_flags().
 
+LESSON 2026-11-25: "A PRICE THAT MOVES" MEANS BETWEEN READS AFTER THE START. WBBL Renegades v Heat went +106 -> +112
+between the 08:00 read and 08:09:51 (the last pre-match move), then sat at +112 for 2h - the sidecar heard nothing
+after 08:09:51 - while Kalshi went 45c -> 1c on ~700k contracts. The rule compared against the 08:00 read and printed
+"PRICE MOVED AFTER THE START". It now needs a change between post-start reads, and quotes the sidecar's last update.
+
 This watches named matches around their start with a few Pinnacle guest-API reads - 4 requests per read at ~1/s, reads
 at start -10, +10, +30, +60 and +120 min - and says which it is. For a paired match it also records what the local
 sidecar holds (/debug/redirect, asks Pinnacle nothing) and, at the end, how many in-play rows the bot logged.
@@ -287,17 +292,36 @@ def verdict(m: dict, snaps: list[dict]) -> str:
             e["status"].add(str(x.get("status")))
             ks = opened(x)
             e["reads"] += bool(ks)
+            if ks:
+                e["prices"].append(px(ks[0]))      # one price per read: the first open moneyline (straight first)
             for k in ks:
-                e["prices"].append(px(k))
                 e["cut"].add("absent" if not k["cutoffAt"] else
                              "past" if iso(k["cutoffAt"]) <= iso(s["at"]) else "future")
-    base = {px(k) for s in pre for x in rel(s) if x["role"] == "target" for k in opened(x)}
+    base = [px(k) for s in pre for x in rel(s) if x["role"] == "target" for k in opened(x)[:1]]
 
     def moved(e) -> bool:
-        if not e["prices"]:
-            return False
-        ref = base if e["x"]["role"] == "target" and base else {e["prices"][0]}
-        return any(p not in ref for p in e["prices"])
+        """A price change BETWEEN reads after the start. A change between the last read before the start and the
+        first one after it is NOT evidence: 2026-11-25 WBBL went +106 -> +112 between the 08:00 read and 08:09:51 -
+        the last pre-match move, before the 08:10 start - then sat at +112 for 2h while Kalshi went 45c -> 1c. The
+        first rule compared against the 08:00 read and called that "price moved after the start"."""
+        return len(set(e["prices"])) > 1
+
+    def heard() -> str:
+        """For a paired match, when the sidecar last heard from Pinnacle about this listing (its own push clock) -
+        a time before the start means the price froze at the start."""
+        ts = []
+        for s in snaps:
+            sc = (s["matches"].get(str(m["mid"])) or {}).get("sidecar") or {}
+            age = (sc.get("parent_meta") or {}).get("last_push_s")
+            if age is None:
+                age = (sc.get("parent") or {}).get("age_s")
+            if isinstance(age, (int, float)):
+                ts.append(iso(s["at"]) - timedelta(seconds=float(age)))
+        if not ts:
+            return ""
+        t = max(ts)
+        return (f" The sidecar's last update for this listing came at {t:%H:%M:%S} UTC, "
+                f"{'BEFORE' if t < start else 'after'} the start.")
 
     def evidence(e) -> str:
         return ", ".join(sorted(e["flags"]) + (["price moved"] if moved(e) else []))
@@ -339,11 +363,10 @@ def verdict(m: dict, snaps: list[dict]) -> str:
                     + ("The sidecar's cutoffAt gate drops exactly this: a cricket-only pass-through would fix it."
                        if "past" in cut else "cutoffAt is not past, so the cutoff gate is NOT what blocks it - look "
                                              "at the sidecar's live subscription for cricket."))
-        first = next(iter(base)) if base else tgt["prices"][0]
-        return (f"PRICE MOVED AFTER THE START BUT NO LIVE FLAG - the pre-match listing stayed open and its price "
-                f"went {fmt_px(first)} -> {fmt_px(tgt['prices'][-1])} while Pinnacle never flagged it live: in play on "
-                "the same listing, or a delayed start being re-priced. Check when the match really started before "
-                f"building anything; {board_note}.")
+        return (f"PRICE MOVED AFTER THE START BUT NO LIVE FLAG - the pre-match listing stayed open and between reads "
+                f"after the start its price went {fmt_px(tgt['prices'][0])} -> {fmt_px(tgt['prices'][-1])} while "
+                "Pinnacle never flagged it live: in play on the same listing, or a delayed start being re-priced. "
+                f"Check when the match really started before building anything; {board_note}.{heard()}")
     shut = [e for e in seen.values() if e["flags"] and not e["prices"]]
     if shut:
         e = shut[0]
@@ -359,15 +382,18 @@ def verdict(m: dict, snaps: list[dict]) -> str:
                    "listing closed") + "). Check it by hand before pulling cricket.")
     if tgt and tgt["prices"]:
         last = tgt["prices"][-1]
+        was = ("" if not base else ", the pre-match price" if last == base[-1] else
+               f"; it changed once before the first read after the start, from {fmt_px(base[-1])} - the last "
+               "pre-match move")
         return (f"NOT PRICED IN PLAY - the pre-match listing stayed up after the start but never went live: status "
                 f"{'/'.join(sorted(tgt['status']))}, isLive / liveMode / live board all off in {tgt['reads']} read(s), "
-                f"price never moved ({fmt_px(last)}{', the pre-match price' if last in base else ''}); {board_note}. "
-                "A stale listing, not an in-play price: the sidecar's cutoffAt gate is right to drop it, and a "
-                "pass-through would feed the shadow a frozen price.")
+                f"price never moved after the start ({fmt_px(last)}{was}); {board_note}.{heard()} A stale listing, "
+                "not an in-play price: the sidecar's cutoffAt gate is right to drop it, and a pass-through would "
+                "feed the shadow a frozen price.")
     if others:
         e = others[0]
         return (f"NOT PRICED IN PLAY - {e['x']['role']} {e['x']['id']} stayed open after the start but never went "
-                f"live and its price never moved ({fmt_px(e['prices'][-1])}); {board_note}.")
+                f"live and its price never moved ({fmt_px(e['prices'][-1])}); {board_note}.{heard()}")
     return ("NOT PRICED IN PLAY - after the start no open moneyline on this match anywhere on the board (the "
             f"original listing closed and nothing replaced it); {board_note}.")
 

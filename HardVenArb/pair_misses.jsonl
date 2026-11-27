@@ -118,3 +118,70 @@
 {"at": "2026-11-24T12:41:22Z", "run": {"misses": 0}}
 {"at": "2026-11-24T14:12:36Z", "run": {"misses": 0}}
 {"at": "2026-11-24T15:43:48Z", "run": {"misses": 0}}
+{"at": "2026-11-24T17:14:50Z", "run": {"misses": 0}}
+{"at": "2026-11-24T18:46:02Z", "run": {"misses": 1}}
+{"event_id": "KXITFWMATCH-26NOV25KOMBRU", "tickers": ["KXITFWMATCH-26NOV25KOMBRU-BRU", "KXITFWMATCH-26NOV25KOMBRU-KOM"], "kalshi": "Komano vs Brune Olsen", "players": ["brune olsen", "komano"], "board": {"token": "202410:1641057225:home", "league": "ITF Women Monastir - R1", "start": "2026-11-25T09:30:00Z", "names": ["astrid olsen", "margaux komano"]}, "why": "KXITFWMATCH-26NOV25KOMBRU-BRU  ['brune olsen', 'komano'] (best leg 62 \u2014 not on Pinnacle's board)", "at": "2026-11-24T18:46:02Z"}
+{"at": "2026-11-24T20:17:14Z", "run": {"misses": 1}}
+{"event_id": "KXITFWMATCH-26NOV25KOMBRU", "tickers": ["KXITFWMATCH-26NOV25KOMBRU-BRU", "KXITFWMATCH-26NOV25KOMBRU-KOM"], "kalshi": "Komano vs Brune Olsen", "players": ["brune olsen", "komano"], "board": {"token": "202410:1641057225:home", "league": "ITF Women Monastir - R1", "start": "2026-11-25T09:30:00Z", "names": ["astrid olsen", "margaux komano"]}, "why": "KXITFWMATCH-26NOV25KOMBRU-BRU  ['brune olsen', 'komano'] (best leg 62 \u2014 not on Pinnacle's board)", "at": "2026-11-24T20:17:14Z"}
+{"at": "2026-11-24T21:48:17Z", "run": {"misses": 1}}
+{"event_id": "KXITFWMATCH-26NOV25KOMBRU", "tickers": ["KXITFWMATCH-26NOV25KOMBRU-BRU", "KXITFWMATCH-26NOV25KOMBRU-KOM"], "kalshi": "Komano vs Brune Olsen", "players": ["brune olsen", "komano"], "board": {"token": "202410:1641057225:home", "league": "ITF Women Monastir - R1", "start": "2026-11-25T09:30:00Z", "names": ["astrid olsen", "margaux komano"]}, "why": "KXITFWMATCH-26NOV25KOMBRU-BRU  ['brune olsen', 'komano'] (best leg 62 \u2014 not on Pinnacle's board)", "at": "2026-11-24T21:48:17Z"}
+{"at": "2026-11-24T23:19:19Z", "run": {"misses": 1}}
+{"event_id": "KXITFWMATCH-26NOV25KOMBRU", "tickers": ["KXITFWMATCH-26NOV25KOMBRU-BRU", "KXITFWMATCH-26NOV25KOMBRU-KOM"], "kalshi": "Komano vs Brune Olsen", "players": ["brune olsen", "komano"], "board": {"token": "202410:1641057225:home", "league": "ITF Women Monastir - R1", "start": "2026-11-25T09:30:00Z", "names": ["astrid olsen", "margaux komano"]}, "why": "KXITFWMATCH-26NOV25KOMBRU-BRU  ['brune olsen', 'komano'] (best leg 62 \u2014 not on Pinnacle's board)", "at": "2026-11-24T23:19:19Z"}
+{"at": "2026-11-25T00:50:20Z", "run": {"misses": 2}}
+{"event_id": "KXATPCHALLENGERMATCH-26NOV24COVMIG", "tickers": ["KXATPCHALLENGERMATCH-26NOV24COVMIG-COV", "KXATPCHALLENGERMATCH-26NOV24COVMIG-MIG"], "kalshi": "Covato vs Miguel", "players": ["covato", "miguel"], "board": {"token": "302458:1640982279:home", "league": "ATP Challenger San Salvador - R1", "start": "2026-11-24T23:00:00Z", "names": ["luis guto miguel", "matteo covato"]}, "why": "paired by this run's matcher, then cleared later in it (price gate / name audit / mirror check)", "at": "2026-11-25T00:50:20Z"}
+{"event_id": "KXITFWMATCH-26NOV25KOMBRU", "tickers": ["KXITFWMATCH-26NOV25KOMBRU-BRU", "KXITFWMATCH-26NOV25KOMBRU-KOM"], "kalshi": "Komano vs Brune Olsen", "players": ["brune olsen", "komano"], "board": {"token": "202410:1641057225:home", "league": "ITF Women Monastir - R1", "start": "2026-11-25T09:30:00Z", "names": ["astrid olsen", "margaux komano"]}, "why": "KXITFWMATCH-26NOV25KOMBRU-BRU  ['brune olsen', 'komano'] (best leg 62 \u2014 not on Pinnacle's board)", "at": "2026-11-25T00:50:20Z"}
+{"at": "2026-11-25T02:21:03Z", "run": {"misses": 1}}
+{"event_id": "KXITFWMATCH-26NOV25KOMBRU", "tickers": ["KXITFWMATCH-26NOV25KOMBRU-BRU", "KXITFWMATCH-26NOV25KOMBRU-KOM"], "kalshi": "Komano vs Brune Olsen", "players": ["brune olsen", "komano"], "board": {"token": "202410:1641057225:home", "league": "ITF Women Monastir - R1", "start": "2026-11-25T09:30:00Z", "names": ["astrid olsen", "margaux komano"]}, "why": "KXITFWMATCH-26NOV25KOMBRU-BRU  ['brune olsen', 'komano'] (best leg 62 \u2014 not on Pinnacle's board)", "at": "2026-11-25T02:21:03Z"}
+{"at": "2026-11-25T03:52:07Z", "run": {"misses": 1}}
+{"event_id": "KXITFWMATCH-26NOV25KOMBRU", "tickers": ["KXITFWMATCH-26NOV25KOMBRU-BRU", "KXITFWMATCH-26NOV25KOMBRU-KOM"], "kalshi": "Komano vs Brune Olsen", "players": ["brune olsen", "komano"], "board": {"token": "202410:1641057225:home", "league": "ITF Women Monastir - R1", "start": "2026-11-25T09:30:00Z", "names": ["astrid olsen", "margaux komano"]}, "why": "KXITFWMATCH-26NOV25KOMBRU-BRU  ['brune olsen', 'komano'] (best leg 62 \u2014 not on Pinnacle's board)", "at": "2026-11-25T03:52:07Z"}
+{"at": "2026-11-25T05:22:49Z", "run": {"misses": 1}}
+{"event_id": "KXITFWMATCH-26NOV25KOMBRU", "tickers": ["KXITFWMATCH-26NOV25KOMBRU-BRU", "KXITFWMATCH-26NOV25KOMBRU-KOM"], "kalshi": "Komano vs Brune Olsen", "players": ["brune olsen", "komano"], "board": {"token": "202410:1641057225:home", "league": "ITF Women Monastir - R1", "start": "2026-11-25T09:30:00Z", "names": ["astrid olsen", "margaux komano"]}, "why": "KXITFWMATCH-26NOV25KOMBRU-BRU  ['brune olsen', 'komano'] (best leg 62 \u2014 not on Pinnacle's board)", "at": "2026-11-25T05:22:49Z"}
+{"at": "2026-11-25T06:53:50Z", "run": {"misses": 1}}
+{"event_id": "KXITFWMATCH-26NOV25KOMBRU", "tickers": ["KXITFWMATCH-26NOV25KOMBRU-BRU", "KXITFWMATCH-26NOV25KOMBRU-KOM"], "kalshi": "Komano vs Brune Olsen", "players": ["brune olsen", "komano"], "board": {"token": "202410:1641057225:home", "league": "ITF Women Monastir - R1", "start": "2026-11-25T09:30:00Z", "names": ["astrid olsen", "margaux komano"]}, "why": "KXITFWMATCH-26NOV25KOMBRU-BRU  ['brune olsen', 'komano'] (best leg 62 \u2014 not on Pinnacle's board)", "at": "2026-11-25T06:53:50Z"}
+{"at": "2026-11-25T08:24:52Z", "run": {"misses": 1}}
+{"event_id": "KXITFWMATCH-26NOV25KOMBRU", "tickers": ["KXITFWMATCH-26NOV25KOMBRU-BRU", "KXITFWMATCH-26NOV25KOMBRU-KOM"], "kalshi": "Komano vs Brune Olsen", "players": ["brune olsen", "komano"], "board": {"token": "202410:1641057225:home", "league": "ITF Women Monastir - R1", "start": "2026-11-25T09:30:00Z", "names": ["astrid olsen", "margaux komano"]}, "why": "KXITFWMATCH-26NOV25KOMBRU-BRU  ['brune olsen', 'komano'] (best leg 62 \u2014 not on Pinnacle's board)", "at": "2026-11-25T08:24:52Z"}
+{"at": "2026-11-25T09:55:56Z", "run": {"misses": 0}}
+{"at": "2026-11-25T11:26:59Z", "run": {"misses": 1}}
+{"event_id": "KXITFWMATCH-26NOV25KOMBRU", "tickers": ["KXITFWMATCH-26NOV25KOMBRU-BRU", "KXITFWMATCH-26NOV25KOMBRU-KOM"], "kalshi": "Komano vs Brune Olsen", "players": ["brune olsen", "komano"], "board": {"token": "202410:1641057225:home", "league": "ITF Women Monastir - R1", "start": "2026-11-25T10:52:42Z", "names": ["astrid olsen", "margaux komano"]}, "why": "KXITFWMATCH-26NOV25KOMBRU-BRU  ['brune olsen', 'komano'] (best leg 62 \u2014 not on Pinnacle's board)", "at": "2026-11-25T11:26:59Z"}
+{"at": "2026-11-25T12:58:02Z", "run": {"misses": 0}}
+{"at": "2026-11-25T14:29:01Z", "run": {"misses": 0}}
+{"at": "2026-11-25T16:00:04Z", "run": {"misses": 0}}
+{"at": "2026-11-25T17:31:04Z", "run": {"misses": 0}}
+{"at": "2026-11-25T19:02:11Z", "run": {"misses": 0}}
+{"at": "2026-11-25T20:33:16Z", "run": {"misses": 1}}
+{"event_id": "KXITFWMATCH-26NOV26LUCBRU", "tickers": ["KXITFWMATCH-26NOV26LUCBRU-BRU", "KXITFWMATCH-26NOV26LUCBRU-LUC"], "kalshi": "Luciano vs Brune Olsen", "players": ["brune olsen", "luciano"], "board": {"token": "202411:1641135983:home", "league": "ITF Women Monastir - R16", "start": "2026-11-26T11:00:00Z", "names": ["astrid olsen", "lavinia luciano"]}, "why": "KXITFWMATCH-26NOV26LUCBRU-BRU  ['brune olsen', 'luciano'] (best leg 62 \u2014 not on Pinnacle's board)", "at": "2026-11-25T20:33:16Z"}
+{"at": "2026-11-25T22:04:19Z", "run": {"misses": 1}}
+{"event_id": "KXITFWMATCH-26NOV26LUCBRU", "tickers": ["KXITFWMATCH-26NOV26LUCBRU-BRU", "KXITFWMATCH-26NOV26LUCBRU-LUC"], "kalshi": "Luciano vs Brune Olsen", "players": ["brune olsen", "luciano"], "board": {"token": "202411:1641135983:home", "league": "ITF Women Monastir - R16", "start": "2026-11-26T11:00:00Z", "names": ["astrid olsen", "lavinia luciano"]}, "why": "KXITFWMATCH-26NOV26LUCBRU-BRU  ['brune olsen', 'luciano'] (best leg 62 \u2014 not on Pinnacle's board)", "at": "2026-11-25T22:04:19Z"}
+{"at": "2026-11-25T23:35:22Z", "run": {"misses": 1}}
+{"event_id": "KXITFWMATCH-26NOV26LUCBRU", "tickers": ["KXITFWMATCH-26NOV26LUCBRU-BRU", "KXITFWMATCH-26NOV26LUCBRU-LUC"], "kalshi": "Luciano vs Brune Olsen", "players": ["brune olsen", "luciano"], "board": {"token": "202411:1641135983:home", "league": "ITF Women Monastir - R16", "start": "2026-11-26T11:00:00Z", "names": ["astrid olsen", "lavinia luciano"]}, "why": "KXITFWMATCH-26NOV26LUCBRU-BRU  ['brune olsen', 'luciano'] (best leg 62 \u2014 not on Pinnacle's board)", "at": "2026-11-25T23:35:22Z"}
+{"at": "2026-11-26T01:06:15Z", "run": {"misses": 1}}
+{"event_id": "KXITFWMATCH-26NOV26LUCBRU", "tickers": ["KXITFWMATCH-26NOV26LUCBRU-BRU", "KXITFWMATCH-26NOV26LUCBRU-LUC"], "kalshi": "Luciano vs Brune Olsen", "players": ["brune olsen", "luciano"], "board": {"token": "202411:1641135983:home", "league": "ITF Women Monastir - R16", "start": "2026-11-26T11:00:00Z", "names": ["astrid olsen", "lavinia luciano"]}, "why": "KXITFWMATCH-26NOV26LUCBRU-BRU  ['brune olsen', 'luciano'] (best leg 62 \u2014 not on Pinnacle's board)", "at": "2026-11-26T01:06:15Z"}
+{"at": "2026-11-26T02:37:26Z", "run": {"misses": 1}}
+{"event_id": "KXITFWMATCH-26NOV26LUCBRU", "tickers": ["KXITFWMATCH-26NOV26LUCBRU-BRU", "KXITFWMATCH-26NOV26LUCBRU-LUC"], "kalshi": "Luciano vs Brune Olsen", "players": ["brune olsen", "luciano"], "board": {"token": "202411:1641135983:home", "league": "ITF Women Monastir - R16", "start": "2026-11-26T08:30:00Z", "names": ["astrid olsen", "lavinia luciano"]}, "why": "KXITFWMATCH-26NOV26LUCBRU-BRU  ['brune olsen', 'luciano'] (best leg 62 \u2014 not on Pinnacle's board)", "at": "2026-11-26T02:37:26Z"}
+{"at": "2026-11-26T04:08:26Z", "run": {"misses": 1}}
+{"event_id": "KXITFWMATCH-26NOV26LUCBRU", "tickers": ["KXITFWMATCH-26NOV26LUCBRU-BRU", "KXITFWMATCH-26NOV26LUCBRU-LUC"], "kalshi": "Luciano vs Brune Olsen", "players": ["brune olsen", "luciano"], "board": {"token": "202411:1641135983:home", "league": "ITF Women Monastir - R16", "start": "2026-11-26T08:30:00Z", "names": ["astrid olsen", "lavinia luciano"]}, "why": "KXITFWMATCH-26NOV26LUCBRU-BRU  ['brune olsen', 'luciano'] (best leg 62 \u2014 not on Pinnacle's board)", "at": "2026-11-26T04:08:26Z"}
+{"at": "2026-11-26T05:39:35Z", "run": {"misses": 1}}
+{"event_id": "KXITFWMATCH-26NOV26LUCBRU", "tickers": ["KXITFWMATCH-26NOV26LUCBRU-BRU", "KXITFWMATCH-26NOV26LUCBRU-LUC"], "kalshi": "Luciano vs Brune Olsen", "players": ["brune olsen", "luciano"], "board": {"token": "202411:1641135983:home", "league": "ITF Women Monastir - R16", "start": "2026-11-26T08:30:00Z", "names": ["astrid olsen", "lavinia luciano"]}, "why": "KXITFWMATCH-26NOV26LUCBRU-BRU  ['brune olsen', 'luciano'] (best leg 62 \u2014 not on Pinnacle's board)", "at": "2026-11-26T05:39:35Z"}
+{"at": "2026-11-26T07:10:37Z", "run": {"misses": 1}}
+{"event_id": "KXITFWMATCH-26NOV26LUCBRU", "tickers": ["KXITFWMATCH-26NOV26LUCBRU-BRU", "KXITFWMATCH-26NOV26LUCBRU-LUC"], "kalshi": "Luciano vs Brune Olsen", "players": ["brune olsen", "luciano"], "board": {"token": "202411:1641135983:home", "league": "ITF Women Monastir - R16", "start": "2026-11-26T08:30:00Z", "names": ["astrid olsen", "lavinia luciano"]}, "why": "KXITFWMATCH-26NOV26LUCBRU-BRU  ['brune olsen', 'luciano'] (best leg 62 \u2014 not on Pinnacle's board)", "at": "2026-11-26T07:10:37Z"}
+{"at": "2026-11-26T08:41:42Z", "run": {"misses": 1}}
+{"event_id": "KXITFWMATCH-26NOV26LUCBRU", "tickers": ["KXITFWMATCH-26NOV26LUCBRU-BRU", "KXITFWMATCH-26NOV26LUCBRU-LUC"], "kalshi": "Luciano vs Brune Olsen", "players": ["brune olsen", "luciano"], "board": {"token": "202411:1641135983:home", "league": "ITF Women Monastir - R16", "start": "2026-11-26T09:30:00Z", "names": ["astrid olsen", "lavinia luciano"]}, "why": "KXITFWMATCH-26NOV26LUCBRU-BRU  ['brune olsen', 'luciano'] (best leg 62 \u2014 not on Pinnacle's board)", "at": "2026-11-26T08:41:42Z"}
+{"at": "2026-11-26T10:12:45Z", "run": {"misses": 2}}
+{"event_id": "KXITFWMATCH-26NOV26ALMFIR", "tickers": ["KXITFWMATCH-26NOV26ALMFIR-ALM", "KXITFWMATCH-26NOV26ALMFIR-FIR"], "kalshi": "Almeida vs Firman", "players": ["almeida", "firman"], "board": {"token": "210528:1641120750:home", "league": "ITF Women Lousada - R16", "start": "2026-11-26T10:13:33Z", "names": ["anastasiia firman", "sofia almeida"]}, "why": "paired by this run's matcher, then cleared later in it (price gate / name audit / mirror check)", "at": "2026-11-26T10:12:45Z"}
+{"event_id": "KXITFWMATCH-26NOV26LUCBRU", "tickers": ["KXITFWMATCH-26NOV26LUCBRU-BRU", "KXITFWMATCH-26NOV26LUCBRU-LUC"], "kalshi": "Luciano vs Brune Olsen", "players": ["brune olsen", "luciano"], "board": {"token": "202411:1641144076:home", "league": "ITF Women Monastir - R16", "start": "2026-11-26T11:00:00Z", "names": ["astrid olsen", "lavinia luciano"]}, "why": "KXITFWMATCH-26NOV26LUCBRU-BRU  ['brune olsen', 'luciano'] (best leg 62 \u2014 not on Pinnacle's board)", "at": "2026-11-26T10:12:45Z"}
+{"at": "2026-11-26T11:43:51Z", "run": {"misses": 0}}
+{"at": "2026-11-26T13:15:08Z", "run": {"misses": 0}}
+{"at": "2026-11-26T14:46:31Z", "run": {"misses": 0}}
+{"at": "2026-11-26T15:37:54Z", "run": {"misses": 0}}
+{"at": "2026-11-26T17:10:05Z", "run": {"misses": 0}}
+{"at": "2026-11-26T18:41:18Z", "run": {"misses": 0}}
+{"at": "2026-11-26T20:12:22Z", "run": {"misses": 0}}
+{"at": "2026-11-26T21:43:34Z", "run": {"misses": 0}}
+{"at": "2026-11-26T23:14:37Z", "run": {"misses": 0}}
+{"at": "2026-11-27T00:45:43Z", "run": {"misses": 0}}
+{"at": "2026-11-27T02:16:49Z", "run": {"misses": 0}}
+{"at": "2026-11-27T03:47:55Z", "run": {"misses": 0}}
+{"at": "2026-11-27T05:19:00Z", "run": {"misses": 0}}
+{"at": "2026-11-27T06:50:05Z", "run": {"misses": 0}}
+{"at": "2026-11-27T08:20:57Z", "run": {"misses": 0}}
+{"at": "2026-11-27T09:52:04Z", "run": {"misses": 0}}
